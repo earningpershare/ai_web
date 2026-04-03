@@ -505,7 +505,7 @@ if not inst_today.empty and not ret_today.empty:
                     tag = "🔴 現價上方"
                 else:
                     tag = "🟢 現價下方"
-            st.write(f"　**{sp_:,.0f}** {tag} — 累積未平倉資金 {r['total_fund']/10000:.0f} 萬")
+            st.write(f"　**{sp_:,.0f}** {tag} — OI 加權量 {r['total_fund']/1000:.0f}（均成本×口數，相對比較用，非實際金額）")
 
     # Divergence observation
     st.subheader("群體部位背離觀察（歷史統計參考）")
