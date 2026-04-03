@@ -179,9 +179,13 @@ OI 最集中履約價 Top 5（Call+Put 合計）:
 📋 報告輸出要求
 ==================================================
 
-請直接輸出完整 HTML，不要加 ```html 包裝。
-格式為專業金融 email 報告，包含完整 <html>...</html> 結構與內嵌 CSS。
-風格：深色藍色系標題、數據表格、重點數字粗體、段落清晰。
+請用純文字（Markdown 格式）輸出報告內容，不要輸出任何 HTML 標籤。
+使用 # ## ### 作為標題層級，用 **粗體** 標示重要數字，用 - 或數字列表。
+格式範例：
+  ## 一、籌碼現況總結
+  ### （一）選擇權關鍵價位
+  **Max Pain：19,000 點**，距現價 -250 點
+  - OI 最集中：18,800 點...
 
 必須按以下章節順序完整輸出：
 
@@ -248,7 +252,7 @@ OI 最集中履約價 Top 5（Call+Put 合計）:
  任何投資決策請自行評估風險，並諮詢合格之期貨顧問。
  過去的數據走勢不代表未來的交易結果。」
 
-現在請開始輸出完整 HTML 報告（直接輸出 HTML，勿加 markdown 包裝）："""
+現在請開始輸出 Markdown 格式報告（純文字，不要任何 HTML 標籤）："""
 
     return prompt
 
@@ -281,52 +285,149 @@ def call_gemini(prompt: str) -> str:
         resp = requests.post(url, json=payload, timeout=120)
         resp.raise_for_status()
         data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+        logger.info("Gemini 回傳內容（前 500 字）:\n%s", text[:500])
+        return text
     except Exception as e:
         logger.error("Gemini REST API 呼叫失敗: %s", e)
+        logger.error("Response body: %s", resp.text[:1000] if resp else "no response")
         raise
 
 
 # ── Email 寄送 ────────────────────────────────────────────────────────────────
 
-def _wrap_email_html(content: str, trade_date: str) -> str:
-    """將 Gemini 回傳的 HTML 包入完整 email 模板（若 Gemini 已輸出完整 HTML 則直接插入 body）"""
-    # 若 Gemini 已輸出完整 <html>...</html> 則直接使用，只在尾端補 footer
-    if content.strip().lower().startswith("<!doctype") or content.strip().lower().startswith("<html"):
-        # 在 </body> 前插入 footer
-        footer = f"""
-<div style="font-size:11px;color:#999;margin-top:24px;border-top:1px solid #eee;padding-top:12px;font-family:Arial,sans-serif">
-  本郵件由台指金融資料庫自動系統寄送 &nbsp;|&nbsp; 資料日期：{trade_date}<br>
-  如需取消訂閱，請回覆此郵件並說明。
-</div>"""
-        if "</body>" in content.lower():
-            return content.replace("</body>", footer + "\n</body>", 1)
-        return content + footer
+def _markdown_to_html(md: str) -> str:
+    """
+    把 Gemini 回傳的 Markdown 轉成 email-safe HTML body 內容。
+    不依賴外部套件，用正規表達式手動轉換。
+    """
+    import re
 
-    # 否則包入基本模板
+    def inline(text: str) -> str:
+        text = re.sub(r"\*\*(.+?)\*\*", r'<strong>\1</strong>', text)
+        text = re.sub(r"\*(.+?)\*",     r'<em>\1</em>', text)
+        text = re.sub(r"`(.+?)`",       r'<code style="background:#f0f0f0;padding:1px 4px;border-radius:3px">\1</code>', text)
+        return text
+
+    # 剝掉 ```markdown / ``` 包裝（Gemini 偶爾會加）
+    md = re.sub(r"^```[a-z]*\n?", "", md.strip(), flags=re.MULTILINE)
+    md = re.sub(r"```$", "", md.strip(), flags=re.MULTILINE)
+    md = md.strip()
+
+    html_lines = []
+    in_ul = False
+    in_ol = False
+    in_disclaimer = False
+
+    def close_lists():
+        nonlocal in_ul, in_ol
+        if in_ul:
+            html_lines.append("</ul>")
+            in_ul = False
+        if in_ol:
+            html_lines.append("</ol>")
+            in_ol = False
+
+    for raw_line in md.splitlines():
+        line = raw_line.rstrip()
+
+        if "免責聲明" in line and line.startswith("#"):
+            in_disclaimer = True
+
+        if line.startswith("#### "):
+            close_lists()
+            html_lines.append(f'<h4 style="color:#455a64;margin:16px 0 6px">{inline(line[5:].strip())}</h4>')
+        elif line.startswith("### "):
+            close_lists()
+            html_lines.append(f'<h3 style="color:#37474f;margin:20px 0 8px;border-left:3px solid #90a4ae;padding-left:8px">{inline(line[4:].strip())}</h3>')
+        elif line.startswith("## "):
+            close_lists()
+            html_lines.append(f'<h2 style="color:#1a237e;margin:28px 0 10px;background:#e8eaf6;padding:8px 12px;border-radius:4px">{inline(line[3:].strip())}</h2>')
+        elif line.startswith("# "):
+            close_lists()
+            html_lines.append(f'<h1 style="color:#0d1b8a;border-bottom:3px solid #1a237e;padding-bottom:10px;margin-bottom:6px">{inline(line[2:].strip())}</h1>')
+        elif line.startswith("- ") or line.startswith("* "):
+            if not in_ul:
+                if in_ol:
+                    html_lines.append("</ol>"); in_ol = False
+                html_lines.append('<ul style="margin:4px 0;padding-left:22px;line-height:1.8">')
+                in_ul = True
+            html_lines.append(f"<li>{inline(line[2:].strip())}</li>")
+        elif re.match(r"^\d+\. ", line):
+            if not in_ol:
+                if in_ul:
+                    html_lines.append("</ul>"); in_ul = False
+                html_lines.append('<ol style="margin:4px 0;padding-left:22px;line-height:1.8">')
+                in_ol = True
+            html_lines.append(f"<li>{inline(re.sub(r'^\\d+\\.\\s*', '', line).strip())}</li>")
+        elif re.match(r"^[-=]{3,}$", line):
+            close_lists()
+            html_lines.append('<hr style="border:none;border-top:1px solid #ddd;margin:16px 0">')
+        elif line == "":
+            close_lists()
+            html_lines.append("")
+        else:
+            close_lists()
+            color = "color:#555;" if in_disclaimer else ""
+            html_lines.append(f'<p style="margin:4px 0;line-height:1.8;{color}">{inline(line)}</p>')
+
+    close_lists()
+    return "\n".join(html_lines)
+
+
+def _wrap_email_html(content: str, trade_date: str) -> str:
+    """把 Gemini Markdown 轉成完整 HTML email"""
+    body = _markdown_to_html(content)
+
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  body {{ font-family: 'Helvetica Neue', Arial, sans-serif; color: #333; max-width: 820px; margin: 0 auto; padding: 20px; }}
-  h1 {{ color: #1a237e; border-bottom: 3px solid #1a237e; padding-bottom: 10px; }}
-  h2 {{ color: #283593; margin-top: 28px; border-left: 4px solid #283593; padding-left: 10px; }}
-  h3 {{ color: #37474f; }}
-  table {{ border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }}
-  th {{ background: #1a237e; color: white; padding: 8px 12px; text-align: left; }}
-  td {{ border: 1px solid #ddd; padding: 7px 12px; }}
-  tr:nth-child(even) {{ background: #f5f7ff; }}
-  .highlight {{ background: #e8eaf6; font-weight: bold; }}
-  .disclaimer {{ background: #fff8e1; border-left: 4px solid #ffa000; padding: 14px 18px; margin-top: 28px; font-size: 12px; color: #555; line-height: 1.7; }}
-  .footer {{ font-size: 11px; color: #999; margin-top: 24px; border-top: 1px solid #eee; padding-top: 12px; }}
+  body {{
+    font-family: 'Helvetica Neue', Arial, 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+    color: #333; background: #f4f6fb;
+    margin: 0; padding: 20px;
+  }}
+  .container {{
+    max-width: 820px; margin: 0 auto;
+    background: #fff; border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 32px 40px;
+  }}
+  .header {{
+    background: linear-gradient(135deg,#1a237e,#283593);
+    color: white; padding: 20px 24px; border-radius: 6px;
+    margin-bottom: 28px;
+  }}
+  .header h1 {{ color:white; margin:0; font-size:20px; border:none; }}
+  .header .subtitle {{ color:#c5cae9; font-size:13px; margin-top:4px; }}
+  .disclaimer-box {{
+    background: #fff8e1; border-left: 4px solid #ffa000;
+    padding: 14px 18px; margin-top: 28px;
+    font-size: 12px; color: #6d4c00; line-height: 1.8;
+    border-radius: 0 4px 4px 0;
+  }}
+  .footer {{
+    font-size: 11px; color: #999; margin-top: 24px;
+    border-top: 1px solid #eee; padding-top: 12px;
+    text-align: center;
+  }}
 </style>
 </head>
 <body>
-{content}
-<div class="footer">
-  本郵件由台指金融資料庫自動系統寄送 &nbsp;|&nbsp; 資料日期：{trade_date}<br>
-  如需取消訂閱，請回覆此郵件並說明。
+<div class="container">
+  <div class="header">
+    <div class="h1">📊 台指籌碼觀察報告</div>
+    <div class="subtitle">資料日期：{trade_date} &nbsp;|&nbsp; 資料來源：TAIFEX 公開資訊</div>
+  </div>
+  {body}
+  <div class="footer">
+    本郵件由台指金融資料庫自動系統寄送 &nbsp;|&nbsp; 資料日期：{trade_date}<br>
+    如需取消訂閱，請回覆此郵件並說明。<br>
+    <span style="color:#bbb">本報告不構成投資建議。期貨交易有高度風險，請自行評估。</span>
+  </div>
 </div>
 </body>
 </html>"""
