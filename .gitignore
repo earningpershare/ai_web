@@ -1,0 +1,37 @@
+# Secrets
+.env
+
+# All hidden dot-files/dirs (AI tool caches, local settings, etc.)
+# Only .gitignore itself is kept
+.*
+!.gitignore
+
+# AI skill files at root level
+skills/
+skills-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Airflow local logs
+airflow/logs/
+
+# Test output
+test_output/
+financial_db.dump
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Oracle VM keys (keep in oracle_vm/ but don't commit)
+oracle_vm/*.key
+oracle_vm/*.pub
