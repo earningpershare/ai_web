@@ -196,31 +196,33 @@ def build_prompt(data: dict) -> str:
 
 def call_gemini(prompt: str) -> str:
     """
-    呼叫 Gemini API 產生報告（使用新版 google-genai SDK）。
-    啟用 Google Search grounding 讓 Gemini 可搜尋當日新聞。
+    透過 REST API 呼叫 Gemini，啟用 Google Search grounding 取得當日新聞。
+    使用 v1beta endpoint 以確保 grounding 功能可用。
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 未設定")
 
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-pro-latest:generateContent?key={GEMINI_API_KEY}"
+    )
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 4096,
+        },
+        "tools": [{"googleSearch": {}}],
+    }
+
     try:
-        from google import genai
-        from google.genai import types
-
-        client = genai.Client(api_key=GEMINI_API_KEY)
-
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.2,
-                max_output_tokens=4096,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-            ),
-        )
-        return response.text
-
+        resp = requests.post(url, json=payload, timeout=120)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        logger.error("Gemini 呼叫失敗: %s", e)
+        logger.error("Gemini REST API 呼叫失敗: %s", e)
         raise
 
 
