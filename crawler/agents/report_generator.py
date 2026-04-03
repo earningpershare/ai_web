@@ -196,33 +196,26 @@ def build_prompt(data: dict) -> str:
 
 def call_gemini(prompt: str) -> str:
     """
-    呼叫 Gemini API 產生報告。
-    使用 Google Search grounding 取得當日新聞。
+    呼叫 Gemini API 產生報告（使用新版 google-genai SDK）。
+    啟用 Google Search grounding 讓 Gemini 可搜尋當日新聞。
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 未設定")
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=GEMINI_API_KEY)
+        from google import genai
+        from google.genai import types
 
-        # 嘗試使用 Google Search grounding（新版 SDK）
-        try:
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-pro-latest",
-                tools=[{"google_search_retrieval": {}}],
-            )
-        except Exception:
-            # 舊版 SDK 不支援 search tool，降級為無 search
-            logger.warning("Google Search grounding 不可用，改為基本模式")
-            model = genai.GenerativeModel(model_name="gemini-1.5-pro-latest")
+        client = genai.Client(api_key=GEMINI_API_KEY)
 
-        response = model.generate_content(
-            prompt,
-            generation_config={
-                "temperature": 0.2,      # 低溫 = 更客觀、一致
-                "max_output_tokens": 4096,
-            },
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=4096,
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
         )
         return response.text
 
