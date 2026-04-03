@@ -14,6 +14,7 @@ API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="市場進階分析", layout="wide")
 st.title("市場進階分析")
+st.caption("⚠️ 本頁所有數據均源自 TAIFEX 公開資訊，僅供資料呈現與學術研究。不構成投資建議或期貨交易推薦。期貨交易涉及高度風險，請自行評估。")
 
 # ── helper ───────────────────────────────────────────────────────────────────
 
@@ -60,15 +61,16 @@ st.sidebar.caption("資料來源：TAIFEX 期交所")
 
 st.header("⭐⭐⭐ 指標一：外資累計 Delta 趨勢")
 
-with st.expander("為什麼看這個？", expanded=True):
+with st.expander("指標說明", expanded=True):
     st.markdown("""
-**指標邏輯：** 外資是台灣期貨市場最大的方向性參與者，其期貨淨 OI + 選擇權淨方向的合計 delta（折算小台口數）
-代表外資對大盤方向的真實押注。
-**判讀方式：**
-- delta 持續往正方向移動 → 外資逐步加碼多方，**偏多訊號**
-- delta 持續往負方向移動 → 外資逐步加碼空方，**偏空訊號**
-- 短期反轉（從大空翻多）→ 可能為結算前軋空的前兆
-- 期貨 delta 與選擇權 delta **背離**時（一多一空）代表外資在用選擇權對沖，方向較不確定
+**指標說明：** 外資期貨淨 OI 與選擇權淨部位合計之 delta 值（折算小台口數），
+反映外資整體持倉方向的統計結果。
+**數據解讀（歷史統計觀察，不代表未來走勢）：**
+- delta 持續往正方向移動 → 外資多方部位口數增加的歷史統計
+- delta 持續往負方向移動 → 外資空方部位口數增加的歷史統計
+- 期貨 delta 與選擇權 delta 方向相反 → 代表外資可能以選擇權進行部位對沖，整體方向較為複雜
+
+本指標為持倉數據統計，不構成任何交易建議。
     """)
 
 dir_df = fetch("/market/direction", params_range)
@@ -92,8 +94,8 @@ if not dir_df.empty:
                   help="(BC+SP−SC−BP)×4")
         c3.metric("外資 合計 delta（小台）",
                   f"{safe_float(last['total_delta_mtx']):+,.0f}",
-                  delta=f"期選{'同向' if safe_float(last['futures_delta_mtx']) * safe_float(last['options_delta_mtx']) >= 0 else '背離⚠️'}",
-                  help="合計值越大越偏多")
+                  delta=f"期選{'同向' if safe_float(last['futures_delta_mtx']) * safe_float(last['options_delta_mtx']) >= 0 else '方向相反'}",
+                  help="期貨與選擇權合計 delta，正值代表多方口數較多（歷史統計，不代表未來走勢）")
 
     # chart: 外資 vs 散戶 total delta trend
     fig = go.Figure()
@@ -150,17 +152,17 @@ st.divider()
 
 st.header("⭐⭐⭐ 指標二：Max Pain 移動方向")
 
-with st.expander("為什麼看這個？", expanded=True):
+with st.expander("指標說明", expanded=True):
     st.markdown("""
-**指標邏輯：** Max Pain（最大痛苦點）是讓「全市場選擇權買方損失最大」的結算價格，
-也就是選擇權賣方（莊家）最希望指數停在的位置。
-由於到期前有大量選擇權需要被「歸零」，市場確實有往 Max Pain 靠攏的傾向（尤其結算日前最後兩日）。
-**判讀方式：**
-- Max Pain **持續上移** → 市場結算壓力往上，偏多
-- Max Pain **持續下移** → 市場結算壓力往下，偏空
-- 現價 **遠低於** Max Pain → 到期前指數可能反彈回 Max Pain（支撐）
-- 現價 **遠高於** Max Pain → 到期前指數可能回落（壓力）
-- Max Pain 與現價差距 **縮小中** → 即將到期，結算引力增強
+**指標說明：** Max Pain（最大痛苦點）是使全市場選擇權買方整體損失最大化的理論結算價格，
+為依據未平倉口數分布計算出的統計數值。
+**數據解讀（歷史統計觀察，不保證未來指數走勢）：**
+- Max Pain 持續上移 → 理論結算價的統計數值上升
+- Max Pain 持續下移 → 理論結算價的統計數值下降
+- 現價與 Max Pain 差距較大 → 兩者之間的統計差值較大
+- Max Pain 與現價差距縮小 → 兩者數值趨近
+
+本指標為數學計算結果，不代表指數實際走勢，不構成交易建議。
     """)
 
 mp_df = fetch("/market/max-pain", params_range)
@@ -178,8 +180,8 @@ if not mp_df.empty:
     c2.metric("現價（TX 近月）", f"{safe_float(last_mp['underlying_price']):,.0f}")
     delta_v = safe_float(last_mp["delta_pts"])
     c3.metric("Max Pain − 現價", f"{delta_v:+,.0f} pts",
-              delta="現價低於Max Pain，到期前有反彈引力" if delta_v > 200 else
-                    ("現價高於Max Pain，到期前有壓力" if delta_v < -200 else "現價接近Max Pain"))
+              delta="現價低於Max Pain" if delta_v > 200 else
+                    ("現價高於Max Pain" if delta_v < -200 else "現價接近Max Pain"))
 
     # chart
     fig = go.Figure()
@@ -203,7 +205,7 @@ if not mp_df.empty:
         name="差距區間", showlegend=False,
     ))
     fig.update_layout(
-        title="Max Pain vs 現價 趨勢（差距越大結算引力越強）",
+        title="Max Pain vs 現價 趨勢（統計差值，不代表走勢預測）",
         yaxis_title="指數點位", height=360,
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
         hovermode="x unified",
@@ -219,7 +221,7 @@ if not mp_df.empty:
     ))
     fig3.add_hline(y=0, line_dash="dash", line_color="gray")
     fig3.update_layout(
-        title="Max Pain − 現價 差距（正=現價低於Max Pain有支撐，負=現價高於有壓力）",
+        title="Max Pain − 現價 差值（正=現價低於Max Pain，負=現價高於Max Pain）",
         yaxis_title="點位差", height=280,
     )
     st.plotly_chart(fig3, use_container_width=True)
@@ -235,16 +237,16 @@ st.divider()
 
 st.header("⭐⭐⭐ 指標三：散戶買 Call 平均成本 vs 現價")
 
-with st.expander("為什麼看這個？", expanded=True):
+with st.expander("指標說明", expanded=True):
     st.markdown("""
-**指標邏輯：** 散戶（市場多數）的 Call 持倉平均買入成本，反映他們的「損益平衡點」。
-當市場買 Call 的平均成本遠高於目前期權市價，代表市場整體 Call 持倉深度虧損，
-這些虧損部位在反彈時會形成「解套賣壓（Sell the Rally）」。
-**判讀方式：**
-- **全市場 Call 加權均成本 > 當日 Call 市價均值** → 大量Call虧損，反彈時賣壓大
-- **成本水位下移中** → 新多頭成本較低，上漲空間較輕鬆
-- **Put 成本水位 vs 現價** → Put 均成本越高代表市場越害怕、保險費已付出，恐慌情緒可能見頂
-- 主要觀察**近月 W1**（最大 OI 週選）的加權均成本分布
+**指標說明：** 依未平倉口數加權計算之選擇權平均持倉成本（點數），
+反映市場整體持倉的成本分布統計。
+**數據解讀（歷史統計觀察，不代表未來走勢）：**
+- **全市場 Call 加權均成本** → 所有到期月份 Call 持倉的口數加權平均買入成本統計
+- **Put 加權均成本** → Put 持倉的統計成本分布
+- **主要觀察近月 W1**（最大 OI 週選）各履約價之持倉成本分布
+
+本指標為統計數值，不構成任何交易建議。
     """)
 
 # fetch strike cost for latest date and most active W contract
@@ -359,13 +361,16 @@ st.divider()
 
 st.header("⭐⭐ 指標四：週選 / 月選 OI 比")
 
-with st.expander("為什麼看這個？", expanded=True):
+with st.expander("指標說明", expanded=True):
     st.markdown("""
-**指標邏輯：** 週選（W/F 系列）是短期投機工具，月選（標準月選）是長期方向性工具。
-- **週選 OI 比重 高（>60%）**：市場以短期投機為主，波動大，方向不確定，容易被軋
-- **週選 OI 比重 低（<40%）**：市場轉向長期方向部位，方向性佈局較強，趨勢較明確
-- **週選佔比驟降** → 大量周選到期清倉後，隔週往往出現方向選擇（指數加速）
-- **月選 Put OI 大增** → 機構在佈局保護性 Put，對下行有疑慮
+**指標說明：** 週選（W/F 系列）與月選（標準月選）的未平倉口數比例統計。
+**數據解讀（歷史統計觀察，不代表未來走勢）：**
+- **週選 OI 比重高（>60%）**：近期市場以短週期合約為主
+- **週選 OI 比重低（<40%）**：近期市場以月選等較長週期合約為主
+- **週選佔比驟降**：可能為大量週選到期後的自然消化
+- **月選 Put OI 增加**：機構持有較多 Put 未平倉口數
+
+本指標為未平倉口數分布統計，不構成任何交易建議。
     """)
 
 ois_df = fetch("/market/oi-structure", params_range)
@@ -444,16 +449,17 @@ st.divider()
 
 st.header("⭐⭐ 指標五：外資選擇權金額流向（千元）")
 
-with st.expander("為什麼看這個？", expanded=True):
+with st.expander("指標說明", expanded=True):
     st.markdown("""
-**指標邏輯：** 用「交易金額（千元）」而非口數來衡量外資的選擇權投入，
-避免大台（TXO）與小台混淆。金額直接反映「真實資金量」。
-**判讀方式：**
-- **BC 金額 > BP 金額** → 外資把更多錢押注在 Call 買方（多方偏向）
-- **SP 金額 > SC 金額** → 外資賣 Put 的資金多（多方偏向，賺 Put 時間價值）
-- **買方（BC+BP）金額 >> 賣方（SC+SP）金額** → 外資是方向性押注（買期望值）
-- **賣方（SC+SP）金額 >> 買方** → 外資是賣方策略（穩定收租，偏中性或輕微方向）
-- 比較外資 vs 散戶的金額比值 → 資金規模懸殊時，外資方向意義更強
+**指標說明：** 以交易金額（千元）統計外資各部位的資金流向，
+相較口數統計可降低大台／小台契約面額差異的影響。
+**數據解讀（歷史統計觀察，不代表未來走勢）：**
+- **BC 金額 vs BP 金額** → Call 買方與 Put 買方的金額分布對比
+- **SP 金額 vs SC 金額** → Put 賣方與 Call 賣方的金額分布對比
+- **買方（BC+BP）vs 賣方（SC+SP）** → 外資選擇權買賣方金額分布比較
+- 比較外資 vs 自營商的金額比值 → 各機構法人的資金規模對比
+
+本指標為成交金額統計，不構成任何交易建議。
     """)
 
 inst_df_full = fetch("/institutional/options", params_range)
@@ -550,7 +556,7 @@ else:
 # ── 總結儀表板 ────────────────────────────────────────────────────────────────
 
 st.divider()
-st.header("綜合訊號速覽")
+st.header("綜合指標速覽")
 
 if not dir_df.empty and not mp_df.empty and not ois_df.empty:
     last_dir = dir_df[dir_df["group_type"] == "外資及陸資"].iloc[-1] if not ext_df.empty else None
@@ -559,31 +565,36 @@ if not dir_df.empty and not mp_df.empty and not ois_df.empty:
 
     signals = []
 
+    st.caption("以下為各項統計數據的當日數值摘要，不構成投資建議。")
+
     if last_dir is not None:
         td = safe_float(last_dir["total_delta_mtx"])
         if td < -50000:
-            signals.append(("🔴 外資合計 delta 大空", f"{td:+,.0f} 小台"))
+            signals.append(("📊 外資合計 delta 空方較多", f"{td:+,.0f} 小台（統計值）"))
         elif td > 50000:
-            signals.append(("🟢 外資合計 delta 大多", f"{td:+,.0f} 小台"))
+            signals.append(("📊 外資合計 delta 多方較多", f"{td:+,.0f} 小台（統計值）"))
         else:
-            signals.append(("⚪ 外資 delta 中性", f"{td:+,.0f} 小台"))
+            signals.append(("📊 外資 delta 多空相近", f"{td:+,.0f} 小台（統計值）"))
 
     dp = safe_float(last_mp2["delta_pts"])
     if dp > 300:
-        signals.append(("🟢 Max Pain 高於現價", f"現價低 {dp:.0f} pts，到期前有撐"))
+        signals.append(("📊 Max Pain 高於現價", f"差值 {dp:.0f} pts"))
     elif dp < -300:
-        signals.append(("🔴 Max Pain 低於現價", f"現價高 {abs(dp):.0f} pts，到期前有壓"))
+        signals.append(("📊 Max Pain 低於現價", f"差值 {abs(dp):.0f} pts"))
     else:
-        signals.append(("⚪ Max Pain 接近現價", f"差距 {dp:+.0f} pts"))
+        signals.append(("📊 Max Pain 接近現價", f"差值 {dp:+.0f} pts"))
 
     wr = safe_float(last_ois2["weekly_oi_ratio"]) * 100
     if wr > 65:
-        signals.append(("⚠️ 週選投機濃厚", f"週選占比 {wr:.0f}%，方向判斷難度高"))
+        signals.append(("📊 週選占比較高", f"週選占比 {wr:.0f}%"))
     elif wr < 40:
-        signals.append(("📌 長期方向部位為主", f"週選占比僅 {wr:.0f}%，趨勢較明確"))
+        signals.append(("📊 月選占比較高", f"週選占比 {wr:.0f}%"))
     else:
-        signals.append(("⚪ 週選比重正常", f"週選占比 {wr:.0f}%"))
+        signals.append(("📊 週月選比重均衡", f"週選占比 {wr:.0f}%"))
 
     col1, col2, col3 = st.columns(3)
     for i, (title, detail) in enumerate(signals[:3]):
         [col1, col2, col3][i].info(f"**{title}**\n\n{detail}")
+
+st.divider()
+st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

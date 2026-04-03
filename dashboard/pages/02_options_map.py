@@ -15,6 +15,7 @@ API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="選擇權資金地圖", layout="wide")
 st.title("選擇權資金地圖")
+st.caption("⚠️ 本頁所有數據均源自 TAIFEX 公開資訊，僅供資料呈現，不構成投資建議。期貨交易有風險，請自行判斷。")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -449,7 +450,7 @@ else:
 # SECTION 5: 盤勢研判
 # ═══════════════════════════════════════════════════════════════════════════════
 
-st.header("五、盤勢研判指標")
+st.header("五、市場數據觀察指標")
 
 if not inst_today.empty and not ret_today.empty:
     ret_r   = ret_today.iloc[0]
@@ -468,13 +469,13 @@ if not inst_today.empty and not ret_today.empty:
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("散戶 BP/BC 比值", f"{retail_pcr:.2f}",
-              help=">1.2 散戶偏空（逆向看多）；<0.8 散戶偏多（逆向看空）")
+              help="比值>1 代表散戶持有 Put 多於 Call；<1 代表 Call 多於 Put（歷史統計觀察，不代表未來走勢）")
     m2.metric("三大法人 BP/BC 比值", f"{inst_pcr:.2f}",
-              help="法人偏空=偏向保護，>1.0 謹慎")
-    m3.metric("外資 選擇權淨多空（口）", f"{ext_score:+,}",
-              help="BC+SP−SC−BP；正=多方部位偏重")
-    m4.metric("散戶 選擇權淨多空（口）", f"{retail_score:+,}",
-              help="散戶為逆向指標：散戶大多空時往往反彈")
+              help="比值>1 代表法人 Put 持倉大於 Call，可能作為避險用途（資料呈現，不構成建議）")
+    m3.metric("外資 選擇權淨部位（口）", f"{ext_score:+,}",
+              help="BC+SP−SC−BP；正值代表多方部位口數較多（歷史統計，不代表未來）")
+    m4.metric("散戶 選擇權淨部位（口）", f"{retail_score:+,}",
+              help="散戶整體選擇權持倉方向統計（歷史觀察，不構成操作建議）")
 
     # Max Pain（從 pipeline 預計算結果讀取）
     mp_today = fetch("/market/max-pain", {"start": selected_date, "end": selected_date, "limit": 1})
@@ -484,12 +485,12 @@ if not inst_today.empty and not ret_today.empty:
         mp_val = float(mp_r["max_pain_strike"]) if mp_r["max_pain_strike"] else None
         delta_mp = float(mp_r["delta_pts"]) if mp_r["delta_pts"] else 0
         if mp_val:
-            st.metric("最大痛苦點", f"{mp_val:,.0f}",
+            st.metric("最大痛苦點（Max Pain）", f"{mp_val:,.0f}",
                       delta=f"{delta_mp:+.0f} pts 相對現價",
-                      help="到期時市場整體損失最小的結算價，指數有向此靠攏的傾向")
+                      help="使全市場選擇權買方損失最大化的理論結算價，為統計計算結果，不保證指數走向此點位")
 
     # Key OI levels
-    st.subheader("重要支撐壓力（OI 資金集中履約價 Top 5）")
+    st.subheader("OI 資金集中履約價 Top 5（歷史統計）")
     if not cost_df_plot.empty:
         top5 = (cost_df_plot.groupby("strike_price")["total_fund"]
                 .sum().reset_index()
@@ -501,44 +502,31 @@ if not inst_today.empty and not ret_today.empty:
                 if abs(sp_ - underlying) <= 125:
                     tag = "⬛ ATM"
                 elif sp_ > underlying:
-                    tag = "🔴 壓力"
+                    tag = "🔴 現價上方"
                 else:
-                    tag = "🟢 支撐"
-            st.write(f"　**{sp_:,.0f}** {tag} — 累積資金 {r['total_fund']/10000:.0f} 萬")
+                    tag = "🟢 現價下方"
+            st.write(f"　**{sp_:,.0f}** {tag} — 累積未平倉資金 {r['total_fund']/10000:.0f} 萬")
 
-    # Divergence signals
-    st.subheader("逆向背離訊號")
+    # Divergence observation
+    st.subheader("群體部位背離觀察（歷史統計參考）")
+    st.caption("以下為各群體持倉方向的統計差異，屬數據呈現，不構成任何投資建議或交易推薦。")
     signals = []
     if retail_pcr > 1.2 and inst_pcr < 1.0:
-        signals.append("✅ 散戶偏空、法人偏多 — 歷史上散戶做空時市場常反彈，**偏多訊號**")
+        signals.append("📊 散戶 Put 持倉較多、法人 Call 持倉較多 — 兩者方向出現統計差異（僅供參考）")
     elif retail_pcr < 0.8 and inst_pcr > 1.0:
-        signals.append("⚠️ 散戶偏多、法人偏空 — 注意下行風險，**偏空訊號**")
+        signals.append("📊 散戶 Call 持倉較多、法人 Put 持倉較多 — 兩者方向出現統計差異（僅供參考）")
     if retail_score > 0 and ext_score < 0:
-        signals.append("⚠️ 散戶多方、外資偏空 — 外資主導方向較準，**偏空**")
+        signals.append("📊 散戶淨部位偏多方、外資淨部位偏空方 — 兩者方向相反（歷史統計，不代表未來）")
     elif retail_score < 0 and ext_score > 0:
-        signals.append("✅ 散戶空方、外資偏多 — **偏多訊號**")
+        signals.append("📊 散戶淨部位偏空方、外資淨部位偏多方 — 兩者方向相反（歷史統計，不代表未來）")
     if not signals:
-        signals.append("─ 目前無明顯背離訊號")
+        signals.append("─ 目前各群體部位方向無明顯統計差異")
     for s in signals:
         st.markdown(s)
 
 else:
-    st.info("需有法人與散戶資料才能進行盤勢研判")
+    st.info("需有法人與散戶資料才能顯示市場數據觀察指標")
 
 # ─────────────────────────────────────────────────────────────────────────────
 st.divider()
-st.subheader("待辦評估清單（建議指標，請確認要加入哪些）")
-st.info("""
-以下為可強化盤勢判斷的指標，請審核後加入待辦：
-
-1. **ATM 隱含波動率（IV）估算** — 用 ATM W1 Call/Put 反推 sigma，作為 VIX 替代指標
-2. **外資累計 delta 趨勢** — 期貨 + 選擇權合計淨 delta，連續 N 日是否在建倉
-3. **Gamma Exposure（GEX）** — 自營商 net gamma：正 GEX 抑制波動、負 GEX 放大波動（需用 delta hedge 推算）
-4. **散戶買 Call 平均成本 vs 現價** — 若散戶 Call 均成本 > 現價，虧損壓力可能形成拋壓
-5. **Max Pain 移動方向** — Max Pain 連日變化：上移=市場預期轉多，下移=轉空
-6. **Put Skew（波動率偏斜）** — OTM Put IV > OTM Call IV 的差距：差距越大代表市場越恐慌
-7. **月選 / 週選 OI 比** — 月選佔比越高=長期方向部位多；週選佔比高=短期投機
-8. **外資選擇權金額流向** — 用 call_buy_amount / put_buy_amount（千元）取代口數，排除大台小台混淆
-9. **到期 OI 消化速度** — 每週三結算前 W 系列 OI 遞減率，可估算結算壓力
-10. **三大法人期貨 + 選擇權合計 delta 視覺化** — 和 market_direction 資料結合，畫出各群體的總方向歷史趨勢折線
-""")
+st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現，不構成投資建議。期貨交易有風險，請自行評估。")
