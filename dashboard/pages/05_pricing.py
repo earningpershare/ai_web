@@ -8,7 +8,7 @@ st.set_page_config(page_title="方案說明", page_icon="💎", layout="wide")
 auth_sidebar()
 
 st.title("💎 方案說明")
-st.caption("選擇適合您的方案，隨時可以升級或取消")
+st.caption("選擇適合您的方案，隨時可以升級")
 st.divider()
 
 cur_plan = current_plan()
@@ -38,7 +38,7 @@ with col_free:
           <div style="text-align:left;color:#ccc;font-size:14px;line-height:2.2">
             ✅ 系統運作狀態<br>
             ✅ 最新資料日期查詢<br>
-            ✅ 隱私權政策<br>
+            ✅ 市場快照（三大法人概覽）<br>
             🔒 選擇權資金地圖<br>
             🔒 市場進階分析<br>
             🔒 每日籌碼報告 Email<br>
@@ -96,7 +96,6 @@ with col_pro:
             type="primary",
             disabled=True,
         )
-        st.caption("目前可使用優惠碼 **LAUNCH2026** 於註冊時免費體驗一個月")
 
 # ─ 終極版 ─
 with col_ult:
@@ -112,9 +111,9 @@ with col_ult:
           <div style="font-size:36px">🏆</div>
           <h2 style="color:#f5a623;margin:12px 0 4px">終極版</h2>
           <div style="font-size:32px;font-weight:bold;color:#f5a623;margin:8px 0">
-            NT$1,688<span style="font-size:16px;color:#888"> / 月</span>
+            NT$1,688
           </div>
-          <div style="color:#888;font-size:13px;margin-bottom:20px">含一對一深度交流</div>
+          <div style="color:#888;font-size:13px;margin-bottom:20px">一次性買斷・永久有效</div>
           <hr style="border-color:#3d2800;margin:16px 0">
           <div style="text-align:left;color:#ccc;font-size:14px;line-height:2.2">
             ✅ 進階版所有功能<br>
@@ -133,12 +132,11 @@ with col_ult:
         st.button("目前方案", key="_cur_ult", disabled=True, use_container_width=True)
     else:
         st.button(
-            "即將開放訂閱",
+            "即將開放購買",
             key="_sub_ult",
             use_container_width=True,
             disabled=True,
         )
-        st.caption("目前可使用優惠碼 **ULTIMATE88** 於註冊時免費體驗一個月")
 
 st.divider()
 
@@ -147,10 +145,9 @@ st.divider()
 with st.expander("🎟️ 優惠碼使用說明"):
     st.markdown(
         """
-        - 優惠碼請於**註冊時填入**，可解鎖對應方案一個月免費體驗
-        - 目前有效優惠碼：`LAUNCH2026`（進階版）、`ULTIMATE88`（終極版）
+        - 優惠碼請於**註冊時填入**，可解鎖對應方案
         - 優惠碼有使用次數限制，先搶先得
-        - 優惠期間結束後若不續訂，自動退回基礎版（免費），不會自動扣款
+        - 優惠碼提供的方案到期後若不續訂，自動退回基礎版（免費），不會自動扣款
         """
     )
 
@@ -160,11 +157,14 @@ with st.expander("❓ 常見問題"):
         **Q：付款方式？**
         A：目前金流串接建置中，正式開放後將支援信用卡、轉帳等常見方式。
 
-        **Q：可以取消嗎？**
+        **Q：進階版可以取消嗎？**
         A：可以，訂閱期滿後不會自動續訂，無任何綁約。
 
+        **Q：終極版買斷是什麼意思？**
+        A：一次性支付 NT$1,688，即可永久享有終極版所有功能，無需每月繳費。
+
         **Q：終極版的「深度交流」是什麼形式？**
-        A：訂閱後將以 Email 提供專屬聯絡方式，可與版主進行文字交流，
+        A：購買後將以 Email 提供專屬聯絡方式，可與版主進行文字交流，
         主題涵蓋市場觀察、籌碼解讀、網站技術等，但不含任何投資操作建議。
 
         **Q：資料來源是否可靠？**
