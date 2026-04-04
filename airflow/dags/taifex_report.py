@@ -23,6 +23,8 @@ NOTIFY_EMAIL = "somehandisfrank@gmail.com"
 
 
 def run_report(ds: str, params: dict = None, **_):
+    import os
+    import requests
     from agents.report_generator import run
     from datetime import date
 
@@ -32,6 +34,21 @@ def run_report(ds: str, params: dict = None, **_):
 
     trade_date = date.fromisoformat(trade_date_str)
     recipients = [e.strip() for e in recipients_str.split(",") if e.strip()] or None
+
+    # 確認是交易日：查 API 當天是否有期貨資料
+    api_url = os.getenv("API_URL", "http://api:8000")
+    try:
+        resp = requests.get(
+            f"{api_url}/futures",
+            params={"contract": "TX", "start": str(trade_date), "end": str(trade_date), "limit": 1},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        if not resp.json():
+            log.info("%s 無期貨資料，視為非交易日，跳過報告生成", trade_date)
+            return
+    except Exception as e:
+        log.warning("無法確認交易日狀態（%s），繼續嘗試生成報告", e)
 
     run(trade_date, recipients=recipients)
 
