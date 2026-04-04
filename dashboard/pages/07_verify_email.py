@@ -1,7 +1,9 @@
 """
 Email 驗證落地頁
 Supabase 驗證信點擊後 redirect 到此頁
-驗證是由 Supabase server 端完成，此頁只需顯示結果
+
+Supabase 使用 hash fragment（#access_token=...）而非 query params，
+Streamlit 無法直接讀取 hash，因此用 JavaScript 將 hash 轉為 query params 再 reload。
 """
 import streamlit as st
 
@@ -13,7 +15,49 @@ st.markdown(
 )
 
 params = st.query_params
+
+# ── Step 1: 若 URL 含 hash fragment，用 JS 轉為 query params 再 reload ──────
+# Supabase redirect: /07_verify_email#access_token=xxx&type=signup
+# 轉換後:           /07_verify_email?access_token=xxx&type=signup
+# 這段 JS 只在有 hash 時執行一次
+
+has_token = params.get("access_token") or params.get("error_description") or params.get("error")
+
+if not has_token:
+    # 注入 JS：把 hash fragment 轉成 query string 並 reload
+    st.markdown(
+        """
+        <script>
+        (function() {
+            var hash = window.location.hash;
+            if (hash && hash.length > 1) {
+                // #access_token=xxx&type=signup → ?access_token=xxx&type=signup
+                var queryString = hash.substring(1);
+                var newUrl = window.location.pathname + '?' + queryString;
+                window.location.replace(newUrl);
+            }
+        })();
+        </script>
+        <noscript>請啟用 JavaScript 以完成驗證</noscript>
+        """,
+        unsafe_allow_html=True,
+    )
+    # 顯示載入中（JS 轉換需要一瞬間）
+    st.markdown(
+        """
+        <div style="text-align:center;padding:60px 0;">
+          <div style="font-size:48px">⏳</div>
+          <p style="color:#aaa;margin-top:16px">正在處理驗證，請稍候...</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
+# ── Step 2: 現在 query params 已就位，處理結果 ─────────────────────────────────
+
 error = params.get("error_description") or params.get("error") or ""
+token_type = params.get("type", "")
 
 st.markdown("<br><br>", unsafe_allow_html=True)
 
@@ -33,8 +77,8 @@ if error:
     )
 else:
     # Supabase 已在 server 端完成驗證再 redirect 過來
-    # 清除 session 中的「等待驗證」狀態
     st.session_state.pop("_verify_email_sent", None)
+    st.session_state.pop("_reg_success_email", None)
     st.session_state["email_verified"] = True
 
     st.markdown(

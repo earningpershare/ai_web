@@ -205,6 +205,8 @@ def login(body: LoginRequest, request: Request):
         resp = sb.auth.sign_in_with_password({"email": email, "password": body.password})
     except Exception as e:
         err = str(e).lower()
+        if "email not confirmed" in err or "not confirmed" in err:
+            raise HTTPException(status_code=403, detail="此帳號信箱尚未驗證，請至信箱點擊驗證連結")
         if "invalid" in err or "credentials" in err or "password" in err:
             raise HTTPException(status_code=401, detail="Email 或密碼錯誤")
         log.error("Supabase login error: %s", e)

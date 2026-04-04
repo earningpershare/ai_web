@@ -101,7 +101,20 @@ def show_login_modal():
     with tab_login:
         email = st.text_input("Email", key="_login_email")
         password = st.text_input("密碼", type="password", key="_login_pw")
-        if st.button("登入", key="_btn_login", use_container_width=True, type="primary"):
+
+        # 若登入時偵測到未驗證，顯示驗證提示
+        if st.session_state.get("_login_need_verify"):
+            unverified_email = st.session_state["_login_need_verify"]
+            st.warning("⚠️ 此帳號尚未完成信箱驗證，請至信箱點擊驗證連結後再登入。")
+            col_r, col_l = st.columns(2)
+            with col_r:
+                if st.button("重送驗證信", key="_login_resend", use_container_width=True):
+                    _resend_by_email(unverified_email)
+            with col_l:
+                if st.button("我已驗證，重新登入", key="_login_retry", use_container_width=True, type="primary"):
+                    st.session_state.pop("_login_need_verify", None)
+                    st.rerun()
+        elif st.button("登入", key="_btn_login", use_container_width=True, type="primary"):
             if not email or not password:
                 st.error("請填寫 Email 和密碼")
             else:
@@ -109,17 +122,27 @@ def show_login_modal():
                     data = _api_post("/auth/login", {"email": email, "password": password})
                     _save_session(data["token"], data["email"], data["plan"],
                                   data.get("email_verified", False))
+                    st.session_state.pop("_login_need_verify", None)
                     st.rerun()
                 except ValueError as e:
-                    st.error(str(e))
+                    err_msg = str(e)
+                    if "尚未驗證" in err_msg or "not confirmed" in err_msg.lower():
+                        st.session_state["_login_need_verify"] = email
+                        st.rerun()
+                    else:
+                        st.error(err_msg)
 
     with tab_reg:
         r_email = st.text_input("Email", key="_reg_email")
         r_name = st.text_input("暱稱（選填）", key="_reg_name")
         r_pw = st.text_input("密碼（至少 6 碼）", type="password", key="_reg_pw")
         r_pw2 = st.text_input("確認密碼", type="password", key="_reg_pw2")
-        r_promo = st.text_input("優惠碼（選填）", key="_reg_promo", placeholder="例：LAUNCH2026")
-        if st.button("建立帳號", key="_btn_reg", use_container_width=True, type="primary"):
+        r_promo = st.text_input("優惠碼（選填）", key="_reg_promo")
+
+        # 註冊成功後在 dialog 內直接顯示驗證提示（不能 st.rerun，會關掉 dialog）
+        if st.session_state.get("_reg_success_email"):
+            _show_verify_prompt_in_dialog(st.session_state["_reg_success_email"])
+        elif st.button("建立帳號", key="_btn_reg", use_container_width=True, type="primary"):
             if not r_email or not r_pw:
                 st.error("請填寫 Email 和密碼")
             elif r_pw != r_pw2:
@@ -135,15 +158,43 @@ def show_login_modal():
                         "promo_code": r_promo,
                     })
                     if data.get("status") == "verification_sent":
-                        # 正常流程：等待 email 驗證
+                        st.session_state["_reg_success_email"] = data["email"]
                         st.session_state["_verify_email_sent"] = data["email"]
                         st.rerun()
                     else:
-                        # email 確認已關閉（不建議）或已驗證
                         _save_session(data["token"], data["email"], data["plan"], True)
                         st.rerun()
                 except ValueError as e:
                     st.error(str(e))
+
+
+def _show_verify_prompt_in_dialog(email: str):
+    """在 dialog 內顯示驗證信提示（不使用 st.rerun 避免關掉 dialog）"""
+    st.markdown(
+        f"""
+        <div style="text-align:center;padding:16px 0 8px;">
+          <div style="font-size:48px">✉️</div>
+          <h3 style="color:#e0e0e0;margin:12px 0 8px">驗證信已寄出</h3>
+          <p style="color:#aaa;font-size:14px;line-height:1.7">
+            我們已將驗證連結寄至<br>
+            <strong style="color:#4f8ef7">{email}</strong><br>
+            請點擊信件中的連結完成驗證，<br>
+            驗證後回到此頁面登入即可。
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.info("⚠️ 若未收到信件，請檢查垃圾郵件匣")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("重送驗證信", key="_reg_resend", use_container_width=True):
+            _resend_by_email(email)
+    with col_b:
+        if st.button("前往登入", key="_reg_goto_login", use_container_width=True, type="primary"):
+            st.session_state.pop("_reg_success_email", None)
+            st.session_state.pop("_verify_email_sent", None)
+            st.rerun()
 
 
 # ── 功能鎖定牆 ────────────────────────────────────────────────────────────────
