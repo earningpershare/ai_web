@@ -117,7 +117,7 @@ def register(body: RegisterRequest, request: Request):
             "email": email,
             "password": body.password,
             "options": {
-                "email_redirect_to": f"{FRONTEND_URL}/07_verify_email",
+                "email_redirect_to": f"{FRONTEND_URL}/verify_email",
                 "data": {"display_name": body.display_name or email.split("@")[0]},
             },
         })
@@ -144,6 +144,9 @@ def register(body: RegisterRequest, request: Request):
     user = sign_up_resp.user
     if not user:
         raise HTTPException(status_code=500, detail="註冊失敗，請稍後再試")
+
+    # sign_up 會觸發 auth state change，導致 postgrest 切換成 user token，還原 service_role
+    sb.postgrest.auth(os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
 
     user_id = str(user.id)
     ip = request.client.host if request.client else None
@@ -229,6 +232,9 @@ def login(body: LoginRequest, request: Request):
     session = resp.session
     if not user or not session:
         raise HTTPException(status_code=401, detail="Email 或密碼錯誤")
+
+    # sign_in_with_password 會觸發 auth state change，導致 postgrest 切換成 user token，還原 service_role
+    sb.postgrest.auth(os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
 
     user_id = str(user.id)
     ip = request.client.host if request.client else None

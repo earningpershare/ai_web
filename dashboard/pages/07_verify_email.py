@@ -17,8 +17,8 @@ st.markdown(
 params = st.query_params
 
 # ── Step 1: 若 URL 含 hash fragment，用 JS 轉為 query params 再 reload ──────
-# Supabase redirect: /07_verify_email#access_token=xxx&type=signup
-# 轉換後:           /07_verify_email?access_token=xxx&type=signup
+# Supabase redirect: /verify_email#access_token=xxx&type=signup
+# 轉換後:           /verify_email?access_token=xxx&type=signup
 # 這段 JS 只在有 hash 時執行一次
 
 has_token = params.get("access_token") or params.get("error_description") or params.get("error")
