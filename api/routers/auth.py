@@ -122,9 +122,22 @@ def register(body: RegisterRequest, request: Request):
             },
         })
     except Exception as e:
-        err = str(e)
+        err = str(e).lower()
         if "already registered" in err or "already been registered" in err:
             raise HTTPException(status_code=409, detail="此 Email 已註冊")
+        if "rate limit" in err or "over_email_send_rate_limit" in err:
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            minutes_until_reset = 60 - now.minute
+            log.warning("Supabase email rate limit hit: %s", e)
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    f"驗證信發送次數已達上限（每小時最多 4 封），"
+                    f"系統暫時無法寄出驗證信。"
+                    f"請約 {minutes_until_reset} 分鐘後再試。"
+                ),
+            )
         log.error("Supabase sign_up error: %s", e)
         raise HTTPException(status_code=500, detail="註冊失敗，請稍後再試")
 
