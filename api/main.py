@@ -19,7 +19,7 @@ Financial Data API — FastAPI 入口
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import system, futures, options, institutional, positions, market
+from routers import system, futures, options, institutional, positions, market, auth
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -48,6 +48,7 @@ _ROUTERS = [
     institutional.router,
     positions.router,
     market.router,
+    auth.router,
 ]
 
 for r in _ROUTERS:

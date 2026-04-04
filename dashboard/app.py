@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 import requests
 import streamlit as st
+from auth import auth_sidebar, is_logged_in, has_plan, show_login_modal, PLAN_LABEL
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
@@ -16,13 +17,19 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+auth_sidebar()
+
 st.title("📈 台指金融資料庫")
 st.caption("TAIFEX 期交所資料 — 數據整合平台")
 st.divider()
 
-st.warning("""
-⚠️ **免責聲明**　本網站所有資料均源自台灣期貨交易所（TAIFEX）公開資訊，僅供資料呈現與學術研究用途，**不構成任何投資建議、期貨交易建議或買賣推薦**。期貨交易涉及高度風險，可能損失全部本金。本網站不具期貨信託事業、期貨顧問事業或任何金融從業資格，不得視為期貨投資分析意見。任何投資決策請自行評估風險，並諮詢合格之期貨顧問。**過去的數據走勢不代表未來的交易結果。**
-""")
+st.warning(
+    "⚠️ **免責聲明**　本網站所有資料均源自台灣期貨交易所（TAIFEX）公開資訊，"
+    "僅供資料呈現與學術研究用途，**不構成任何投資建議、期貨交易建議或買賣推薦**。"
+    "期貨交易涉及高度風險，可能損失全部本金。本網站不具期貨信託事業、期貨顧問事業"
+    "或任何金融從業資格，不得視為期貨投資分析意見。任何投資決策請自行評估風險，"
+    "並諮詢合格之期貨顧問。**過去的數據走勢不代表未來的交易結果。**"
+)
 
 st.divider()
 
@@ -57,35 +64,78 @@ if api_ok:
 
 st.divider()
 
-# ── 頁面導覽 ─────────────────────────────────────────────────────────────────
+# ── 功能頁面 ──────────────────────────────────────────────────────────────────
 
 st.subheader("功能頁面")
+
+FREE_BADGE = "🟢 免費"
+PRO_BADGE  = "🔵 進階版"
 
 c1, c2 = st.columns(2)
 
 with c1:
-    st.info("""
-**📊 選擇權資金地圖**
-（左側選單 → 02 options map）
-
-- 選擇權 T 字報價表 + 各履約價資金分布（含歷史累積成本色彩）
-- 外資 / 散戶 BC / BP / SC / SP 每日變化
-- 各身份別持倉比例圓餅圖
-- ITM / OTM 未平倉分布
-- PCR、Max Pain、關鍵支撐壓力位
-""")
+    # 付費功能
+    locked = not (is_logged_in() and has_plan("pro"))
+    badge = PRO_BADGE if locked else f"{PRO_BADGE} ✅"
+    with st.container(border=True):
+        st.markdown(f"**📊 選擇權資金地圖** &nbsp; `{badge}`")
+        st.markdown(
+            "- 選擇權 T 字報價表 + 各履約價資金分布（含歷史累積成本色彩）\n"
+            "- 外資 / 散戶 BC / BP / SC / SP 每日變化\n"
+            "- 各身份別持倉比例圓餅圖\n"
+            "- ITM / OTM 未平倉分布\n"
+            "- PCR、Max Pain、關鍵價位"
+        )
+        if locked:
+            if st.button("🔒 解鎖此功能", key="_unlock_02", use_container_width=True, type="primary"):
+                if not is_logged_in():
+                    show_login_modal()
+                else:
+                    st.switch_page("pages/05_pricing.py")
+        else:
+            if st.button("前往頁面 →", key="_go_02", use_container_width=True):
+                st.switch_page("pages/02_options_map.py")
 
 with c2:
-    st.info("""
-**🔬 市場進階分析**
-（左側選單 → 03 market analysis）
-
-- ⭐⭐⭐ 外資累計 Delta 趨勢（期貨 + 選擇權合計，折算小台）
-- ⭐⭐⭐ Max Pain 移動方向 vs 現價
-- ⭐⭐⭐ 散戶買 Call 平均成本 vs 現價
-- ⭐⭐ 週選 / 月選 OI 比重
-- ⭐⭐ 外資選擇權金額流向（千元）
-""")
+    # 付費功能
+    locked = not (is_logged_in() and has_plan("pro"))
+    with st.container(border=True):
+        st.markdown(f"**🔬 市場進階分析** &nbsp; `{badge}`")
+        st.markdown(
+            "- ⭐⭐⭐ 外資累計 Delta 趨勢（期貨 + 選擇權合計，折算小台）\n"
+            "- ⭐⭐⭐ Max Pain 移動方向 vs 現價\n"
+            "- ⭐⭐⭐ 散戶買 Call 平均成本 vs 現價\n"
+            "- ⭐⭐ 週選 / 月選 OI 比重\n"
+            "- ⭐⭐ 外資選擇權金額流向（千元）"
+        )
+        if locked:
+            if st.button("🔒 解鎖此功能", key="_unlock_03", use_container_width=True, type="primary"):
+                if not is_logged_in():
+                    show_login_modal()
+                else:
+                    st.switch_page("pages/05_pricing.py")
+        else:
+            if st.button("前往頁面 →", key="_go_03", use_container_width=True):
+                st.switch_page("pages/03_market_analysis.py")
 
 st.divider()
-st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  更新頻率：每交易日收盤後自動彙整  |  本站不提供投資建議  |  隱私權政策請見左側選單 → 04 privacy")
+
+# ── 每日籌碼報告（付費功能說明） ──────────────────────────────────────────────
+
+with st.container(border=True):
+    st.markdown(f"**📧 每日籌碼觀察報告 Email** &nbsp; `{PRO_BADGE}`")
+    st.markdown(
+        "每個交易日收盤後，系統自動以 AI 分析當日籌碼數據並寄送報告至您的信箱。\n\n"
+        "訂閱進階版後，系統會以您的註冊 Email 自動加入寄送名單。"
+    )
+    if not (is_logged_in() and has_plan("pro")):
+        col_a, col_b = st.columns([1, 3])
+        with col_a:
+            if st.button("查看方案", key="_report_plan", use_container_width=True, type="primary"):
+                st.switch_page("pages/05_pricing.py")
+
+st.divider()
+st.caption(
+    "資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  更新頻率：每交易日收盤後自動彙整  |  "
+    "本站不提供投資建議  |  [隱私權政策](./04_privacy)"
+)

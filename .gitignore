@@ -5,6 +5,7 @@
 # Only .gitignore itself is kept
 .*
 !.gitignore
+!dashboard/.streamlit/
 
 # AI skill files at root level
 skills/

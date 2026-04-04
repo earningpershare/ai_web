@@ -58,6 +58,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/00_create_airflow_db.sql:/docker-entrypoint-initdb.d/00_create_airflow_db.sql
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./postgres/02_auth.sql:/docker-entrypoint-initdb.d/02_auth.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -133,6 +134,7 @@ services:
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
+      JWT_SECRET: ${JWT_SECRET}
     ports:
       - "8000:8000"
     depends_on:

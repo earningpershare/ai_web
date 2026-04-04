@@ -13,6 +13,10 @@ import requests
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="市場進階分析", layout="wide")
+from auth import require_plan, auth_sidebar
+auth_sidebar()
+require_plan("pro")
+
 st.title("市場進階分析")
 st.caption("⚠️ 本頁所有數據均源自 TAIFEX 公開資訊，僅供資料呈現與學術研究。不構成投資建議或期貨交易推薦。期貨交易涉及高度風險，請自行評估。")
 
