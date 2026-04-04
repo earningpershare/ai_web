@@ -135,6 +135,10 @@ services:
     environment:
       POSTGRES_HOST: postgres
       JWT_SECRET: ${JWT_SECRET}
+      GMAIL_USER: ${GMAIL_USER}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      FRONTEND_URL: ${FRONTEND_URL}
     ports:
       - "8000:8000"
     depends_on:

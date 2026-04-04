@@ -71,6 +71,19 @@ st.subheader("功能頁面")
 FREE_BADGE = "🟢 免費"
 PRO_BADGE  = "🔵 進階版"
 
+# 免費功能
+with st.container(border=True):
+    st.markdown(f"**📊 今日市場快照** &nbsp; `{FREE_BADGE}`")
+    st.markdown(
+        "- 三大法人期貨淨未平倉口數（最新 + 近 5 日趨勢）\n"
+        "- 散戶期貨多空部位概況\n"
+        "- 升級 CTA（引導查看完整分析）"
+    )
+    if st.button("前往頁面 →", key="_go_01", use_container_width=True):
+        st.switch_page("pages/01_market_overview.py")
+
+st.markdown("<br>", unsafe_allow_html=True)
+
 c1, c2 = st.columns(2)
 
 with c1:

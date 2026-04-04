@@ -1,26 +1,38 @@
 """
-Auth Router — 使用者註冊 / 登入 / 個人資料
+Auth Router — 使用者註冊 / 登入 / 個人資料 / Email 驗證
 POST /auth/register
 POST /auth/login
 GET  /auth/me
+GET  /auth/verify?token=xxx
+POST /auth/resend-verification
 """
 
 import hashlib
+import logging
 import os
 import secrets
+import smtplib
 from datetime import datetime, timezone, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import jwt
-from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi import APIRouter, HTTPException, Header, Query, Request
 from pydantic import BaseModel, EmailStr
 
 from routers.db import get_conn
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 
 JWT_SECRET = os.getenv("JWT_SECRET", "changeme")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 30
+
+GMAIL_USER = os.getenv("GMAIL_USER", "somehandisfrank@gmail.com")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8501")
 
 PLAN_RANK = {"free": 0, "pro": 1, "ultimate": 2}
 
@@ -58,6 +70,115 @@ def _current_user(authorization: str) -> dict:
     return _decode_token(authorization[7:])
 
 
+# ── email sending ─────────────────────────────────────────────────────────────
+
+def _make_email_html(verify_link: str) -> str:
+    return f"""
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#0a0a0a;font-family:sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0">
+    <tr><td align="center" style="padding:40px 20px;">
+      <table width="520" cellpadding="0" cellspacing="0"
+             style="background:#111;border:1px solid #222;border-radius:12px;overflow:hidden;">
+        <tr>
+          <td style="background:#4f8ef7;padding:28px 32px;">
+            <div style="font-size:22px;font-weight:bold;color:#fff;">📈 TaifexAI</div>
+            <div style="font-size:13px;color:#cde;margin-top:4px;">台指金融資料庫</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:32px;">
+            <h2 style="color:#e0e0e0;margin:0 0 16px;">驗證您的信箱</h2>
+            <p style="color:#aaa;line-height:1.7;margin:0 0 24px;">
+              感謝您註冊 TaifexAI！請點擊下方按鈕完成信箱驗證，
+              驗證連結將在 <strong style="color:#e0e0e0;">24 小時</strong>後失效。
+            </p>
+            <div style="text-align:center;margin:32px 0;">
+              <a href="{verify_link}"
+                 style="background:#4f8ef7;color:#fff;text-decoration:none;
+                        padding:14px 36px;border-radius:8px;font-size:15px;
+                        font-weight:bold;display:inline-block;">
+                驗證信箱
+              </a>
+            </div>
+            <p style="color:#666;font-size:12px;margin:24px 0 0;word-break:break-all;">
+              若按鈕無法點擊，請複製此連結到瀏覽器：<br>
+              <span style="color:#4f8ef7;">{verify_link}</span>
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 32px;border-top:1px solid #222;">
+            <p style="color:#555;font-size:11px;margin:0;">
+              若您沒有申請帳號，請忽略此信件。
+            </p>
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>
+"""
+
+
+def _send_via_gmail(to_email: str, subject: str, html_body: str):
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = GMAIL_USER
+    msg["To"] = to_email
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
+        server.starttls()
+        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_USER, to_email, msg.as_string())
+
+
+def _send_via_sendgrid(to_email: str, subject: str, html_body: str):
+    import sendgrid as sg_module
+    from sendgrid.helpers.mail import Mail
+    sg = sg_module.SendGridAPIClient(api_key=SENDGRID_API_KEY)
+    mail = Mail(
+        from_email=GMAIL_USER,
+        to_emails=to_email,
+        subject=subject,
+        html_content=html_body,
+    )
+    resp = sg.send(mail)
+    if resp.status_code >= 400:
+        raise Exception(f"SendGrid HTTP {resp.status_code}")
+
+
+def _send_verification_email(to_email: str, token: str):
+    verify_link = f"{FRONTEND_URL}/verify_email?token={token}"
+    subject = "【TaifexAI】驗證您的信箱"
+    html_body = _make_email_html(verify_link)
+
+    # 優先嘗試 Gmail
+    try:
+        _send_via_gmail(to_email, subject, html_body)
+        log.info("Verification email sent via Gmail to %s", to_email)
+        return
+    except Exception as e:
+        log.warning("Gmail send failed for %s: %s", to_email, e)
+
+    # 備援 SendGrid
+    if SENDGRID_API_KEY:
+        try:
+            _send_via_sendgrid(to_email, subject, html_body)
+            log.info("Verification email sent via SendGrid to %s", to_email)
+            return
+        except Exception as e:
+            log.warning("SendGrid send failed for %s: %s", to_email, e)
+
+    raise HTTPException(
+        status_code=503,
+        detail="今日驗證信額度已滿，請明天再試，或聯繫客服處理"
+    )
+
+
 # ── schemas ───────────────────────────────────────────────────────────────────
 
 class RegisterRequest(BaseModel):
@@ -87,7 +208,6 @@ def register(body: RegisterRequest, request: Request):
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 檢查 email 是否已存在
             cur.execute("SELECT id FROM users WHERE email = %s", (email,))
             if cur.fetchone():
                 raise HTTPException(status_code=409, detail="此 Email 已註冊")
@@ -114,13 +234,16 @@ def register(body: RegisterRequest, request: Request):
             pw_hash = _hash_password(password, salt)
             initial_plan = promo["target_plan"] if promo else "free"
             referral_source = "promo_code" if promo_code else "organic"
+            verify_token = secrets.token_hex(32)
+            token_expires = datetime.now(timezone.utc) + timedelta(hours=24)
 
             cur.execute(
                 """INSERT INTO users
                      (email, password_hash, password_salt, display_name, plan,
                       referral_source, promo_code_used,
-                      utm_source, utm_medium, utm_campaign)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                      utm_source, utm_medium, utm_campaign,
+                      email_verified, verification_token, token_expires_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, %s, %s)
                    RETURNING id""",
                 (
                     email, pw_hash, salt,
@@ -128,6 +251,7 @@ def register(body: RegisterRequest, request: Request):
                     initial_plan, referral_source, promo_code or None,
                     body.utm_source or None, body.utm_medium or None,
                     body.utm_campaign or None,
+                    verify_token, token_expires,
                 ),
             )
             user_id = cur.fetchone()["id"]
@@ -142,7 +266,6 @@ def register(body: RegisterRequest, request: Request):
                        VALUES (%s, %s, 'active', %s, 0, %s)""",
                     (user_id, initial_plan, expires, promo_code),
                 )
-                # 更新優惠碼使用次數
                 cur.execute(
                     "UPDATE promo_codes SET used_count = used_count + 1 WHERE id = %s",
                     (promo["id"],),
@@ -157,11 +280,18 @@ def register(body: RegisterRequest, request: Request):
                    VALUES (%s, 'registered', NULL, %s, %s, %s, %s)""",
                 (user_id, initial_plan, promo_code or None, ip, ua),
             )
-
             conn.commit()
 
+    # 寄送驗證信（在 commit 之後，失敗不回滾）
+    _send_verification_email(email, verify_token)
+
     token = _make_token(user_id, email, initial_plan)
-    return {"token": token, "plan": initial_plan, "email": email}
+    return {
+        "token": token,
+        "plan": initial_plan,
+        "email": email,
+        "email_verified": False,
+    }
 
 
 @router.post("/login")
@@ -171,7 +301,8 @@ def login(body: LoginRequest, request: Request):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, password_hash, password_salt, plan, is_active FROM users WHERE email = %s",
+                """SELECT id, password_hash, password_salt, plan, is_active, email_verified
+                   FROM users WHERE email = %s""",
                 (email,),
             )
             user = cur.fetchone()
@@ -191,8 +322,7 @@ def login(body: LoginRequest, request: Request):
             ip = request.client.host if request.client else None
             ua = request.headers.get("user-agent", "")
             cur.execute(
-                """UPDATE users SET last_login_at = NOW(), login_count = login_count + 1
-                   WHERE id = %s""",
+                "UPDATE users SET last_login_at = NOW(), login_count = login_count + 1 WHERE id = %s",
                 (user["id"],),
             )
             cur.execute(
@@ -204,7 +334,12 @@ def login(body: LoginRequest, request: Request):
             conn.commit()
 
     token = _make_token(user["id"], email, user["plan"])
-    return {"token": token, "plan": user["plan"], "email": email}
+    return {
+        "token": token,
+        "plan": user["plan"],
+        "email": email,
+        "email_verified": bool(user["email_verified"]),
+    }
 
 
 @router.get("/me")
@@ -215,7 +350,8 @@ def me(authorization: str = Header(default="")):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT id, email, display_name, plan, created_at, last_login_at, login_count
+                """SELECT id, email, display_name, plan, email_verified,
+                          created_at, last_login_at, login_count
                    FROM users WHERE id = %s""",
                 (user_id,),
             )
@@ -223,7 +359,6 @@ def me(authorization: str = Header(default="")):
             if not user:
                 raise HTTPException(status_code=404, detail="使用者不存在")
 
-            # 取最新有效訂閱
             cur.execute(
                 """SELECT plan, status, started_at, expires_at
                    FROM user_subscriptions
@@ -238,8 +373,83 @@ def me(authorization: str = Header(default="")):
         "email": user["email"],
         "display_name": user["display_name"],
         "plan": user["plan"],
+        "email_verified": bool(user["email_verified"]),
         "created_at": str(user["created_at"])[:10],
         "last_login_at": str(user["last_login_at"])[:10] if user["last_login_at"] else None,
         "login_count": user["login_count"],
         "subscription": dict(sub) if sub else None,
     }
+
+
+@router.get("/verify")
+def verify_email(token: str = Query(...)):
+    """點擊信件連結後由 Streamlit 頁面呼叫"""
+    if not token or len(token) < 10:
+        raise HTTPException(status_code=400, detail="無效的驗證連結")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id, email_verified, token_expires_at
+                   FROM users
+                   WHERE verification_token = %s""",
+                (token,),
+            )
+            user = cur.fetchone()
+
+            if not user:
+                raise HTTPException(status_code=400, detail="驗證連結無效或已使用")
+            if user["email_verified"]:
+                return {"ok": True, "message": "信箱已驗證"}
+            if user["token_expires_at"] and user["token_expires_at"] < datetime.now(timezone.utc):
+                raise HTTPException(status_code=400, detail="驗證連結已過期，請重新寄送")
+
+            cur.execute(
+                """UPDATE users
+                   SET email_verified = TRUE,
+                       verification_token = NULL,
+                       token_expires_at = NULL
+                   WHERE id = %s""",
+                (user["id"],),
+            )
+            conn.commit()
+
+    return {"ok": True, "message": "信箱驗證成功！"}
+
+
+@router.post("/resend-verification")
+def resend_verification(authorization: str = Header(default="")):
+    payload = _current_user(authorization)
+    user_id = int(payload["sub"])
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT email, email_verified, token_expires_at FROM users WHERE id = %s",
+                (user_id,),
+            )
+            user = cur.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="使用者不存在")
+            if user["email_verified"]:
+                raise HTTPException(status_code=400, detail="信箱已完成驗證")
+
+            # 防止頻繁重送：若上次寄出未超過 5 分鐘，拒絕
+            if user["token_expires_at"]:
+                time_left = user["token_expires_at"] - datetime.now(timezone.utc)
+                if time_left.total_seconds() > 23 * 3600 + 55 * 60:  # 距離到期還有 23h55m 以上
+                    raise HTTPException(status_code=429, detail="請稍後再試（每 5 分鐘只能重送一次）")
+
+            # 產生新 token
+            new_token = secrets.token_hex(32)
+            new_expires = datetime.now(timezone.utc) + timedelta(hours=24)
+            cur.execute(
+                """UPDATE users
+                   SET verification_token = %s, token_expires_at = %s
+                   WHERE id = %s""",
+                (new_token, new_expires, user_id),
+            )
+            conn.commit()
+
+    _send_verification_email(user["email"], new_token)
+    return {"ok": True, "message": "驗證信已重新寄出"}

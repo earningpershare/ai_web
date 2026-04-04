@@ -39,14 +39,19 @@ def _api_get(endpoint: str) -> dict:
 
 # ── Session 工具 ──────────────────────────────────────────────────────────────
 
-def _save_session(token: str, email: str, plan: str):
+def _save_session(token: str, email: str, plan: str, email_verified: bool = False):
     st.session_state["token"] = token
     st.session_state["email"] = email
     st.session_state["plan"] = plan
+    st.session_state["email_verified"] = email_verified
 
 
 def is_logged_in() -> bool:
     return bool(st.session_state.get("token"))
+
+
+def is_verified() -> bool:
+    return bool(st.session_state.get("email_verified", False))
 
 
 def current_plan() -> str:
@@ -72,7 +77,8 @@ def show_login_modal():
             else:
                 try:
                     data = _api_post("/auth/login", {"email": email, "password": password})
-                    _save_session(data["token"], data["email"], data["plan"])
+                    _save_session(data["token"], data["email"], data["plan"],
+                                  data.get("email_verified", False))
                     st.success("登入成功！")
                     st.rerun()
                 except ValueError as e:
@@ -99,9 +105,11 @@ def show_login_modal():
                         "display_name": r_name,
                         "promo_code": r_promo,
                     })
-                    _save_session(data["token"], data["email"], data["plan"])
+                    _save_session(data["token"], data["email"], data["plan"],
+                                  data.get("email_verified", False))
                     plan_label = PLAN_LABEL.get(data["plan"], data["plan"])
                     st.success(f"註冊成功！目前方案：{plan_label}")
+                    st.info("📧 驗證信已寄出，請至信箱點擊連結完成驗證。")
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -135,7 +143,7 @@ def _show_locked_wall(reason: str, required: str = "pro"):
             """,
             unsafe_allow_html=True,
         )
-        col1, col2, col3 = st.columns([1, 1, 1])
+        _, col2, _ = st.columns([1, 1, 1])
         with col2:
             if st.button("登入 / 註冊", key="_wall_login_btn", use_container_width=True, type="primary"):
                 show_login_modal()
@@ -150,7 +158,7 @@ def _show_locked_wall(reason: str, required: str = "pro"):
             """,
             unsafe_allow_html=True,
         )
-        col1, col2, col3 = st.columns([1, 1, 1])
+        _, col2, _ = st.columns([1, 1, 1])
         with col2:
             if st.button("查看方案", key="_wall_upgrade_btn", use_container_width=True, type="primary"):
                 st.switch_page("pages/05_pricing.py")
@@ -167,16 +175,51 @@ def auth_sidebar():
             color = PLAN_COLOR.get(plan, "#888")
             label = PLAN_LABEL.get(plan, plan)
             email = st.session_state.get("email", "")
+            verified = is_verified()
+
             st.markdown(
                 f'<div style="font-size:12px;color:#aaa">{email}</div>'
                 f'<div style="font-size:13px;font-weight:bold;color:{color}">● {label}</div>',
                 unsafe_allow_html=True,
             )
+
+            # 未驗證警告
+            if not verified:
+                st.markdown(
+                    '<div style="font-size:12px;color:#f5a623;margin-top:6px;">⚠️ 信箱尚未驗證</div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button("重新寄送驗證信", key="_sidebar_resend",
+                             use_container_width=True):
+                    _resend_verification()
+
             if st.button("登出", key="_sidebar_logout", use_container_width=True):
-                for k in ["token", "email", "plan"]:
+                for k in ["token", "email", "plan", "email_verified"]:
                     st.session_state.pop(k, None)
                 st.rerun()
         else:
             st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
             if st.button("登入 / 註冊", key="_sidebar_login", use_container_width=True, type="primary"):
                 show_login_modal()
+
+
+def _resend_verification():
+    token = st.session_state.get("token", "")
+    if not token:
+        st.error("請先登入")
+        return
+    try:
+        _requests.post(
+            f"{API_URL}/auth/resend-verification",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=20,
+        ).raise_for_status()
+        st.success("驗證信已寄出，請查收信箱！")
+    except _requests.HTTPError as e:
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except Exception:
+            detail = str(e)
+        st.error(detail)
+    except Exception as e:
+        st.error(f"寄送失敗：{e}")
