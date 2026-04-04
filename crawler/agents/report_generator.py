@@ -286,11 +286,15 @@ def call_gemini(prompt: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
-        logger.info("Gemini 回傳內容（前 500 字）:\n%s", text[:500])
-        return text
+        logger.info("Gemini 回傳內容（前 300 字）:\n%s", text[:300])
+
+        # Gemini 常把 HTML 包在 ```html ... ``` 裡，剝掉包裝
+        import re
+        stripped = re.sub(r"^```[a-z]*\n?", "", text.strip(), flags=re.IGNORECASE)
+        stripped = re.sub(r"\n?```\s*$", "", stripped.strip())
+        return stripped.strip()
     except Exception as e:
         logger.error("Gemini REST API 呼叫失敗: %s", e)
-        logger.error("Response body: %s", resp.text[:1000] if resp else "no response")
         raise
 
 
@@ -376,7 +380,26 @@ def _markdown_to_html(md: str) -> str:
 
 
 def _wrap_email_html(content: str, trade_date: str) -> str:
-    """把 Gemini Markdown 轉成完整 HTML email"""
+    """
+    把 Gemini 回傳內容轉成完整 HTML email。
+    - 若 Gemini 回傳完整 HTML（<!DOCTYPE 或 <html>）→ 直接插入 footer 使用
+    - 否則視為 Markdown → 轉換成 HTML body
+    """
+    # 若 Gemini 已輸出完整 HTML，直接用（加 footer）
+    c = content.strip()
+    if c.lower().startswith("<!doctype") or c.lower().startswith("<html"):
+        footer = (
+            f'<div style="font-size:11px;color:#999;margin-top:24px;border-top:1px solid #eee;'
+            f'padding-top:12px;text-align:center;font-family:Arial,sans-serif">'
+            f'本郵件由台指金融資料庫自動系統寄送 &nbsp;|&nbsp; 資料日期：{trade_date}<br>'
+            f'如需取消訂閱，請回覆此郵件並說明。<br>'
+            f'<span style="color:#bbb">本報告不構成投資建議。</span></div>'
+        )
+        if "</body>" in c.lower():
+            return c.replace("</body>", footer + "\n</body>", 1)
+        return c + footer
+
+    # 否則把 Markdown 轉成 HTML body
     body = _markdown_to_html(content)
 
     return f"""<!DOCTYPE html>
