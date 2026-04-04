@@ -363,7 +363,8 @@ def _markdown_to_html(md: str) -> str:
                     html_lines.append("</ul>"); in_ul = False
                 html_lines.append('<ol style="margin:4px 0;padding-left:22px;line-height:1.8">')
                 in_ol = True
-            html_lines.append(f"<li>{inline(re.sub(r'^\\d+\\.\\s*', '', line).strip())}</li>")
+            item_text = re.sub(r"^\d+\.\s*", "", line).strip()
+            html_lines.append(f"<li>{inline(item_text)}</li>")
         elif re.match(r"^[-=]{3,}$", line):
             close_lists()
             html_lines.append('<hr style="border:none;border-top:1px solid #ddd;margin:16px 0">')
