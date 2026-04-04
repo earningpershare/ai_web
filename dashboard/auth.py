@@ -66,6 +66,36 @@ def has_plan(min_plan: str) -> bool:
 
 @st.experimental_dialog("登入 / 註冊")
 def show_login_modal():
+    # ── 剛完成註冊、等待 email 驗證 ──────────────────────────────
+    pending_email = st.session_state.get("_verify_email_sent")
+    if pending_email:
+        st.markdown(
+            f"""
+            <div style="text-align:center;padding:20px 0 12px;">
+              <div style="font-size:48px">✉️</div>
+              <h3 style="color:#e0e0e0;margin:12px 0 8px">驗證信已寄出</h3>
+              <p style="color:#aaa;font-size:14px;line-height:1.7">
+                我們已將驗證連結寄至<br>
+                <strong style="color:#4f8ef7">{pending_email}</strong><br>
+                請點擊信件中的連結完成驗證，<br>
+                驗證後回到此頁面登入即可。
+              </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.info("⚠️ 若未收到信件，請檢查垃圾郵件匣")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("重送驗證信", key="_modal_resend", use_container_width=True):
+                _resend_by_email(pending_email)
+        with col_b:
+            if st.button("前往登入", key="_modal_goto_login", use_container_width=True, type="primary"):
+                del st.session_state["_verify_email_sent"]
+                st.rerun()
+        return
+
+    # ── 正常登入 / 註冊 tabs ──────────────────────────────────────
     tab_login, tab_reg = st.tabs(["登入", "註冊"])
 
     with tab_login:
@@ -79,7 +109,6 @@ def show_login_modal():
                     data = _api_post("/auth/login", {"email": email, "password": password})
                     _save_session(data["token"], data["email"], data["plan"],
                                   data.get("email_verified", False))
-                    st.success("登入成功！")
                     st.rerun()
                 except ValueError as e:
                     st.error(str(e))
@@ -105,12 +134,14 @@ def show_login_modal():
                         "display_name": r_name,
                         "promo_code": r_promo,
                     })
-                    _save_session(data["token"], data["email"], data["plan"],
-                                  data.get("email_verified", False))
-                    plan_label = PLAN_LABEL.get(data["plan"], data["plan"])
-                    st.success(f"註冊成功！目前方案：{plan_label}")
-                    st.info("📧 驗證信已寄出，請至信箱點擊連結完成驗證。")
-                    st.rerun()
+                    if data.get("status") == "verification_sent":
+                        # 正常流程：等待 email 驗證
+                        st.session_state["_verify_email_sent"] = data["email"]
+                        st.rerun()
+                    else:
+                        # email 確認已關閉（不建議）或已驗證
+                        _save_session(data["token"], data["email"], data["plan"], True)
+                        st.rerun()
                 except ValueError as e:
                     st.error(str(e))
 
@@ -204,6 +235,7 @@ def auth_sidebar():
 
 
 def _resend_verification():
+    """Sidebar 用：需要已登入 token"""
     token = st.session_state.get("token", "")
     if not token:
         st.error("請先登入")
@@ -221,5 +253,21 @@ def _resend_verification():
         except Exception:
             detail = str(e)
         st.error(detail)
+    except Exception as e:
+        st.error(f"寄送失敗：{e}")
+
+
+def _resend_by_email(email: str):
+    """Modal 用：尚未登入，只用 email 重送"""
+    try:
+        r = _requests.post(
+            f"{API_URL}/auth/resend-by-email",
+            json={"email": email},
+            timeout=20,
+        )
+        if r.ok:
+            st.success("驗證信已重新寄出！")
+        else:
+            st.error(r.json().get("detail", "寄送失敗"))
     except Exception as e:
         st.error(f"寄送失敗：{e}")

@@ -117,7 +117,7 @@ def register(body: RegisterRequest, request: Request):
             "email": email,
             "password": body.password,
             "options": {
-                "email_redirect_to": f"{FRONTEND_URL}/verify_email",
+                "email_redirect_to": f"{FRONTEND_URL}/07_verify_email",
                 "data": {"display_name": body.display_name or email.split("@")[0]},
             },
         })
@@ -174,17 +174,26 @@ def register(body: RegisterRequest, request: Request):
         "user_agent": ua,
     }).execute()
 
-    # 取得 session（Supabase 在 email 確認前可能不回 session）
+    # Supabase 開啟 email 確認時 session 為 None（正常行為）
     session = sign_up_resp.session
-    token = session.access_token if session else ""
-    email_verified = bool(user.email_confirmed_at)
-
-    return {
-        "token": token,
-        "plan": initial_plan,
-        "email": email,
-        "email_verified": email_verified,
-    }
+    if session:
+        # email 確認已關閉，直接回 token（不建議在 production 使用）
+        return {
+            "token": session.access_token,
+            "plan": initial_plan,
+            "email": email,
+            "email_verified": True,
+            "status": "logged_in",
+        }
+    else:
+        # 正常流程：email 待驗證，不回 token
+        return {
+            "token": "",
+            "plan": initial_plan,
+            "email": email,
+            "email_verified": False,
+            "status": "verification_sent",
+        }
 
 
 @router.post("/login")
@@ -256,6 +265,26 @@ def me(authorization: str = Header(default="")):
     }
 
 
+class ResendByEmailRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post("/resend-by-email")
+def resend_by_email(body: ResendByEmailRequest):
+    """不需要 token — 供尚未登入的新用戶重送驗證信"""
+    sb = get_supabase()
+    try:
+        sb.auth.resend({
+            "type": "signup",
+            "email": body.email.lower().strip(),
+            "options": {"email_redirect_to": f"{FRONTEND_URL}/07_verify_email"},
+        })
+    except Exception as e:
+        log.error("Resend by email error: %s", e)
+        raise HTTPException(status_code=503, detail="今日驗證信額度已滿，請明天再試")
+    return {"ok": True, "message": "驗證信已重新寄出"}
+
+
 @router.post("/resend-verification")
 def resend_verification(authorization: str = Header(default="")):
     user = _current_user(authorization)
@@ -265,7 +294,7 @@ def resend_verification(authorization: str = Header(default="")):
     sb = get_supabase()
     try:
         sb.auth.resend({"type": "signup", "email": user.email,
-                        "options": {"email_redirect_to": f"{FRONTEND_URL}/verify_email"}})
+                        "options": {"email_redirect_to": f"{FRONTEND_URL}/07_verify_email"}})
     except Exception as e:
         log.error("Resend verification error: %s", e)
         raise HTTPException(status_code=503, detail="今日驗證信額度已滿，請明天再試")
