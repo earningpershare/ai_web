@@ -73,7 +73,7 @@ PRO_BADGE  = "🔵 進階版"
 
 # 免費功能
 with st.container(border=True):
-    st.markdown(f"**📊 今日市場快照** &nbsp; `{FREE_BADGE}`")
+    st.markdown(f"**📊 市場快照** &nbsp; `{FREE_BADGE}`")
     st.markdown(
         "- 三大法人期貨淨未平倉口數（最新 + 近 5 日趨勢）\n"
         "- 散戶期貨多空部位概況\n"

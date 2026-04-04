@@ -134,10 +134,8 @@ services:
     env_file: .env
     environment:
       POSTGRES_HOST: postgres
-      JWT_SECRET: ${JWT_SECRET}
-      GMAIL_USER: ${GMAIL_USER}
-      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD}
-      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       FRONTEND_URL: ${FRONTEND_URL}
     ports:
       - "8000:8000"

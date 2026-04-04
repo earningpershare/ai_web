@@ -1,6 +1,6 @@
 """
-今日市場快照 — 免費頁面
-三大法人期貨淨部位 + 未平倉口數概覽
+市場快照 — 免費頁面
+三大法人期貨淨部位 + 未平倉口數概覽（永遠顯示最近一個交易日資料）
 """
 import os
 from datetime import date, timedelta
@@ -11,10 +11,10 @@ from auth import auth_sidebar
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-st.set_page_config(page_title="今日市場快照", page_icon="📊", layout="wide")
+st.set_page_config(page_title="市場快照", page_icon="📊", layout="wide")
 auth_sidebar()
 
-st.title("📊 今日市場快照")
+st.title("📊 市場快照")
 st.caption("三大法人期貨籌碼概覽 — 每交易日收盤後更新　🟢 免費公開")
 st.divider()
 
@@ -22,9 +22,10 @@ st.divider()
 # ── 資料載入 ──────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=600)
-def load_institutional_futures(days: int = 5):
+def load_institutional_futures():
+    """往回查 30 天，確保假日/長假也能找到最近交易日"""
     end = date.today()
-    start = end - timedelta(days=days + 7)  # 多抓幾天以防假日
+    start = end - timedelta(days=30)
     try:
         r = requests.get(
             f"{API_URL}/institutional/futures",
@@ -32,7 +33,7 @@ def load_institutional_futures(days: int = 5):
                 "start": str(start),
                 "end": str(end),
                 "contract": "TX",
-                "limit": 30,
+                "limit": 50,
             },
             timeout=10,
         )
@@ -43,13 +44,13 @@ def load_institutional_futures(days: int = 5):
 
 
 @st.cache_data(ttl=600)
-def load_retail_futures(days: int = 1):
+def load_retail_futures():
     end = date.today()
-    start = end - timedelta(days=days + 7)
+    start = end - timedelta(days=30)
     try:
         r = requests.get(
             f"{API_URL}/retail/futures",
-            params={"start": str(start), "end": str(end), "limit": 5},
+            params={"start": str(start), "end": str(end), "limit": 10},
             timeout=10,
         )
         r.raise_for_status()
@@ -58,8 +59,8 @@ def load_retail_futures(days: int = 1):
         return []
 
 
-data = load_institutional_futures(days=10)
-retail_data = load_retail_futures(days=1)
+data = load_institutional_futures()
+retail_data = load_retail_futures()
 
 # 取得最新交易日與各法人資料
 if not data:
