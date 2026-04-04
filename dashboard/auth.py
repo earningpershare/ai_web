@@ -59,7 +59,7 @@ def has_plan(min_plan: str) -> bool:
 
 # ── 登入 / 註冊 Modal ─────────────────────────────────────────────────────────
 
-@st.dialog("登入 / 註冊")
+@st.experimental_dialog("登入 / 註冊")
 def show_login_modal():
     tab_login, tab_reg = st.tabs(["登入", "註冊"])
 
