@@ -32,7 +32,7 @@ def load_institutional_futures():
             params={
                 "start": str(start),
                 "end": str(end),
-                "contract": "TX",
+                "contract": "臺股期貨",
                 "limit": 50,
             },
             timeout=10,
@@ -60,7 +60,7 @@ def load_retail_futures():
 
 
 data = load_institutional_futures()
-retail_data = load_retail_futures()
+retail_data = [r for r in load_retail_futures() if r.get("contract_code") == "臺股期貨"]
 
 # 取得最新交易日與各法人資料
 if not data:
