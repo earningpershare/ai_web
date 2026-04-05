@@ -19,6 +19,10 @@ st.set_page_config(
 
 auth_sidebar()
 
+# 從驗證信頁面跳回來時，自動彈出登入框
+if st.session_state.pop("_auto_show_login", False) and not is_logged_in():
+    show_login_modal()
+
 st.title("📈 台指金融資料庫")
 st.caption("TAIFEX 期交所資料 — 數據整合平台")
 st.divider()

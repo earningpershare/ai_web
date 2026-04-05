@@ -80,6 +80,7 @@ else:
     st.session_state.pop("_verify_email_sent", None)
     st.session_state.pop("_reg_success_email", None)
     st.session_state["email_verified"] = True
+    st.session_state["_auto_show_login"] = True  # 回首頁後自動彈出登入框
 
     st.markdown(
         """
@@ -87,10 +88,21 @@ else:
           <div style="font-size:64px">✅</div>
           <h2 style="color:#4f8ef7;margin:16px 0 8px">信箱驗證成功！</h2>
           <p style="color:#aaa;line-height:1.8">
-            您的帳號已完成驗證，歡迎加入 TaifexAI。<br>
-            請點擊下方按鈕登入，開始使用。
+            您的帳號已完成驗證。<br>
+            即將自動跳轉至首頁，請登入開始使用。
           </p>
         </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    # 3 秒後自動跳轉
+    st.markdown(
+        """
+        <script>
+        setTimeout(function() {
+            window.location.href = "/";
+        }, 3000);
+        </script>
         """,
         unsafe_allow_html=True,
     )
@@ -98,6 +110,6 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 _, col, _ = st.columns([1, 1, 1])
 with col:
-    label = "返回首頁" if error else "前往登入"
+    label = "返回首頁" if error else "立即登入"
     if st.button(label, use_container_width=True, type="primary"):
         st.switch_page("app.py")
