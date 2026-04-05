@@ -88,7 +88,7 @@ else:
           <div style="font-size:64px">✅</div>
           <h2 style="color:#4f8ef7;margin:16px 0 8px">信箱驗證成功！</h2>
           <p style="color:#aaa;line-height:1.8">
-            您的帳號已完成驗證。<br>
+            歡迎加入台指天空 SpaceTFX。<br>
             即將自動跳轉至首頁，請登入開始使用。
           </p>
         </div>

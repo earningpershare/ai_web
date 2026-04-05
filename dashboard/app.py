@@ -1,5 +1,5 @@
 """
-台指金融資料庫 — 首頁
+台指天空 SpaceTFX — 首頁
 """
 import os
 from datetime import date, timedelta
@@ -11,8 +11,8 @@ from auth import auth_sidebar, is_logged_in, has_plan, show_login_modal, PLAN_LA
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(
-    page_title="台指金融資料庫",
-    page_icon="📈",
+    page_title="台指天空 SpaceTFX",
+    page_icon="🚀",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -23,8 +23,8 @@ auth_sidebar()
 if st.session_state.pop("_auto_show_login", False) and not is_logged_in():
     show_login_modal()
 
-st.title("📈 台指金融資料庫")
-st.caption("TAIFEX 期交所資料 — 數據整合平台")
+st.title("🚀 台指天空 SpaceTFX")
+st.caption("從高空俯視台指市場　TAIFEX 籌碼數據平台")
 st.divider()
 
 st.warning(
