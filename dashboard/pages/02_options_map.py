@@ -44,7 +44,33 @@ def safe_int(v, default=0):
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
-def _prev_trading_day() -> date:
+@st.cache_data(ttl=600)
+def _latest_trade_date() -> date:
+    """從 API 取得最新有資料的交易日，避免行事曆無法處理假日的問題"""
+    try:
+        end = date.today()
+        start = end - timedelta(days=30)
+        r = requests.get(
+            f"{API_URL}/options/strike-cost",
+            params={"trade_date": str(end)},
+            timeout=10,
+        )
+        # 若當日無資料，改撈近 30 天並取最新日期
+        data = r.json() if r.ok else []
+        if data:
+            return date.fromisoformat(data[0]["trade_date"])
+        # fallback: 查近 30 天 institutional futures 取最新交易日
+        r2 = requests.get(
+            f"{API_URL}/institutional/futures",
+            params={"start": str(start), "end": str(end), "contract": "臺股期貨", "limit": 50},
+            timeout=10,
+        )
+        rows = r2.json() if r2.ok else []
+        if rows:
+            return date.fromisoformat(rows[0]["trade_date"])
+    except Exception:
+        pass
+    # 最後 fallback：往回找最近工作日
     d = date.today() - timedelta(days=1)
     while d.weekday() >= 5:
         d -= timedelta(days=1)
@@ -52,7 +78,7 @@ def _prev_trading_day() -> date:
 
 
 st.sidebar.header("選項")
-selected_date = st.sidebar.date_input("交易日期", value=_prev_trading_day())
+selected_date = st.sidebar.date_input("交易日期", value=_latest_trade_date())
 prev_date = selected_date - timedelta(days=1)
 while prev_date.weekday() >= 5:
     prev_date -= timedelta(days=1)
