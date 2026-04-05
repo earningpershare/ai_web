@@ -44,8 +44,15 @@ def safe_int(v, default=0):
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 
+def _prev_trading_day() -> date:
+    d = date.today() - timedelta(days=1)
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d
+
+
 st.sidebar.header("選項")
-selected_date = st.sidebar.date_input("交易日期", value=date.today() - timedelta(days=1))
+selected_date = st.sidebar.date_input("交易日期", value=_prev_trading_day())
 prev_date = selected_date - timedelta(days=1)
 while prev_date.weekday() >= 5:
     prev_date -= timedelta(days=1)

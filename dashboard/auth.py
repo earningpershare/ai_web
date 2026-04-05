@@ -10,8 +10,15 @@ Auth helper — 供所有 Streamlit 頁面共用
 import os
 import streamlit as st
 import requests as _requests
+import extra_streamlit_components as stx
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+_COOKIE_KEY = "auth_token"
+_COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
+
+
+def _cookie_manager():
+    return stx.CookieManager(key="_auth_cookies")
 
 PLAN_RANK = {"free": 0, "pro": 1, "ultimate": 2}
 PLAN_LABEL = {"free": "基礎版（免費）", "pro": "進階版", "ultimate": "終極版"}
@@ -48,10 +55,6 @@ def _save_session(token: str, email: str, plan: str, email_verified: bool = Fals
 
 def is_logged_in() -> bool:
     return bool(st.session_state.get("token"))
-
-
-def is_verified() -> bool:
-    return bool(st.session_state.get("email_verified", False))
 
 
 def current_plan() -> str:
@@ -250,6 +253,30 @@ def _show_locked_wall(reason: str, required: str = "pro"):
 
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
+    cm = _cookie_manager()
+
+    # 若尚未登入，嘗試從 cookie 還原 session
+    if not is_logged_in():
+        token = cm.get(_COOKIE_KEY)
+        if token and token != "None":
+            try:
+                r = _requests.get(
+                    f"{API_URL}/auth/me",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=10,
+                )
+                if r.ok:
+                    data = r.json()
+                    st.session_state["token"] = token
+                    st.session_state["email"] = data["email"]
+                    st.session_state["plan"] = data["plan"]
+                    st.session_state["email_verified"] = data.get("email_verified", False)
+                    st.rerun()
+                else:
+                    cm.delete(_COOKIE_KEY)
+            except Exception:
+                pass
+
     with st.sidebar:
         st.divider()
         if is_logged_in():
@@ -257,7 +284,9 @@ def auth_sidebar():
             color = PLAN_COLOR.get(plan, "#888")
             label = PLAN_LABEL.get(plan, plan)
             email = st.session_state.get("email", "")
-            verified = is_verified()
+
+            # 每次頁面載入時更新 cookie 到期時間
+            cm.set(_COOKIE_KEY, st.session_state["token"], max_age=_COOKIE_MAX_AGE)
 
             st.markdown(
                 f'<div style="font-size:12px;color:#aaa">{email}</div>'
@@ -265,17 +294,8 @@ def auth_sidebar():
                 unsafe_allow_html=True,
             )
 
-            # 未驗證警告
-            if not verified:
-                st.markdown(
-                    '<div style="font-size:12px;color:#f5a623;margin-top:6px;">⚠️ 信箱尚未驗證</div>',
-                    unsafe_allow_html=True,
-                )
-                if st.button("重新寄送驗證信", key="_sidebar_resend",
-                             use_container_width=True):
-                    _resend_verification()
-
             if st.button("登出", key="_sidebar_logout", use_container_width=True):
+                cm.delete(_COOKIE_KEY)
                 for k in ["token", "email", "plan", "email_verified"]:
                     st.session_state.pop(k, None)
                 st.rerun()
@@ -283,29 +303,6 @@ def auth_sidebar():
             st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
             if st.button("登入 / 註冊", key="_sidebar_login", use_container_width=True, type="primary"):
                 show_login_modal()
-
-
-def _resend_verification():
-    """Sidebar 用：需要已登入 token"""
-    token = st.session_state.get("token", "")
-    if not token:
-        st.error("請先登入")
-        return
-    try:
-        _requests.post(
-            f"{API_URL}/auth/resend-verification",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=20,
-        ).raise_for_status()
-        st.success("驗證信已寄出，請查收信箱！")
-    except _requests.HTTPError as e:
-        try:
-            detail = e.response.json().get("detail", str(e))
-        except Exception:
-            detail = str(e)
-        st.error(detail)
-    except Exception as e:
-        st.error(f"寄送失敗：{e}")
 
 
 def _resend_by_email(email: str):
