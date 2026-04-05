@@ -9,16 +9,45 @@ Auth helper — 供所有 Streamlit 頁面共用
 
 import os
 import streamlit as st
+from streamlit.source_util import get_pages
+import streamlit.components.v1 as components
 import requests as _requests
-import extra_streamlit_components as stx
+
+
+def _hide_page(page_name: str):
+    """從 Streamlit 側邊欄導航中移除指定頁面"""
+    pages = get_pages("app.py")
+    keys_to_remove = [k for k, v in pages.items() if v.get("page_name") == page_name]
+    for k in keys_to_remove:
+        del pages[k]
+
+
+_hide_page("verify_email")
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 _COOKIE_KEY = "auth_token"
 _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
 
 
-def _cookie_manager():
-    return stx.CookieManager(key="_auth_cookies")
+def _set_cookie(token: str):
+    """用 JS 寫入 cookie"""
+    components.html(
+        f'<script>document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Strict";</script>',
+        height=0,
+    )
+
+
+def _delete_cookie():
+    """用 JS 刪除 cookie"""
+    components.html(
+        f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Strict";</script>',
+        height=0,
+    )
+
+
+def _get_cookie_from_query() -> str | None:
+    """從 query_params 讀取由 JS 轉寫的 cookie token"""
+    return st.query_params.get("_auth_restore")
 
 PLAN_RANK = {"free": 0, "pro": 1, "ultimate": 2}
 PLAN_LABEL = {"free": "基礎版（免費）", "pro": "進階版", "ultimate": "終極版"}
@@ -51,6 +80,7 @@ def _save_session(token: str, email: str, plan: str, email_verified: bool = Fals
     st.session_state["email"] = email
     st.session_state["plan"] = plan
     st.session_state["email_verified"] = email_verified
+    _set_cookie(token)
 
 
 def is_logged_in() -> bool:
@@ -253,30 +283,46 @@ def _show_locked_wall(reason: str, required: str = "pro"):
 
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
-    cm = _cookie_manager()
 
-    # 若尚未登入，嘗試從 cookie 還原 session
-    # _logged_out flag 防止 cm.delete() 的 JS 還沒執行完，rerun 就又把 cookie 讀回來
-    if not is_logged_in() and not st.session_state.pop("_logged_out", False):
-        token = cm.get(_COOKIE_KEY)
-        if token and token != "None":
+    # ── 從 cookie 還原 session（新分頁時）─────────────────────────
+    # 第一次載入：注入 JS 讀 cookie 並用 query_params 回傳 token
+    # 第二次載入（JS reload 後）：從 query_params 取得 token 並還原 session
+    if not is_logged_in():
+        restore_token = _get_cookie_from_query()
+        if restore_token:
+            # 從 JS redirect 帶回的 token，嘗試驗證
+            st.query_params.clear()
             try:
                 r = _requests.get(
                     f"{API_URL}/auth/me",
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={"Authorization": f"Bearer {restore_token}"},
                     timeout=10,
                 )
                 if r.ok:
                     data = r.json()
-                    st.session_state["token"] = token
+                    st.session_state["token"] = restore_token
                     st.session_state["email"] = data["email"]
                     st.session_state["plan"] = data["plan"]
                     st.session_state["email_verified"] = data.get("email_verified", False)
                     st.rerun()
                 else:
-                    cm.delete(_COOKIE_KEY)
+                    _delete_cookie()
             except Exception:
                 pass
+        else:
+            # 注入 JS：讀 cookie，若有 token 就把它放到 query_params 再 reload
+            components.html(
+                f"""<script>
+                var m = document.cookie.match('(^|;)\\\\s*{_COOKIE_KEY}=([^;]+)');
+                if (m) {{
+                    var t = m[2];
+                    var url = window.parent.location;
+                    var base = url.origin + url.pathname;
+                    window.parent.location.href = base + '?_auth_restore=' + encodeURIComponent(t);
+                }}
+                </script>""",
+                height=0,
+            )
 
     with st.sidebar:
         st.divider()
@@ -286,9 +332,6 @@ def auth_sidebar():
             label = PLAN_LABEL.get(plan, plan)
             email = st.session_state.get("email", "")
 
-            # 每次頁面載入時更新 cookie 到期時間
-            cm.set(_COOKIE_KEY, st.session_state["token"], max_age=_COOKIE_MAX_AGE)
-
             st.markdown(
                 f'<div style="font-size:12px;color:#aaa">{email}</div>'
                 f'<div style="font-size:13px;font-weight:bold;color:{color}">● {label}</div>',
@@ -296,10 +339,9 @@ def auth_sidebar():
             )
 
             if st.button("登出", key="_sidebar_logout", use_container_width=True):
-                cm.delete(_COOKIE_KEY)
+                _delete_cookie()
                 for k in ["token", "email", "plan", "email_verified"]:
                     st.session_state.pop(k, None)
-                st.session_state["_logged_out"] = True
                 st.rerun()
         else:
             st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
