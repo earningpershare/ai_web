@@ -253,16 +253,6 @@ def _show_locked_wall(reason: str, required: str = "pro"):
 
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
-    # 隱藏 verify_email 頁面不出現在 Streamlit 自動生成的側邊欄導航中
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stSidebarNav"] li:has(a[href*="verify_email"]) { display: none; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
     cm = _cookie_manager()
 
     # 若尚未登入，嘗試從 cookie 還原 session
