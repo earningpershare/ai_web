@@ -256,7 +256,8 @@ def auth_sidebar():
     cm = _cookie_manager()
 
     # 若尚未登入，嘗試從 cookie 還原 session
-    if not is_logged_in():
+    # _logged_out flag 防止 cm.delete() 的 JS 還沒執行完，rerun 就又把 cookie 讀回來
+    if not is_logged_in() and not st.session_state.pop("_logged_out", False):
         token = cm.get(_COOKIE_KEY)
         if token and token != "None":
             try:
@@ -298,6 +299,7 @@ def auth_sidebar():
                 cm.delete(_COOKIE_KEY)
                 for k in ["token", "email", "plan", "email_verified"]:
                     st.session_state.pop(k, None)
+                st.session_state["_logged_out"] = True
                 st.rerun()
         else:
             st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
