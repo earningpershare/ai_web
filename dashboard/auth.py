@@ -67,7 +67,7 @@ def has_plan(min_plan: str) -> bool:
 
 # ── 登入 / 註冊 Modal ─────────────────────────────────────────────────────────
 
-@st.experimental_dialog("登入 / 註冊")
+@st.dialog("登入 / 註冊")
 def show_login_modal():
     # ── 剛完成註冊、等待 email 驗證 ──────────────────────────────
     pending_email = st.session_state.get("_verify_email_sent")
