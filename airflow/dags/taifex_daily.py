@@ -10,10 +10,13 @@ from __future__ import annotations
 import sys
 import logging
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
 from airflow.utils.email import send_email
+
+_TAIPEI = ZoneInfo("Asia/Taipei")
 
 # 讓 DAG 能 import crawler agents
 sys.path.insert(0, "/opt/crawler")
@@ -79,57 +82,74 @@ def dag_failure_callback(context):
 
 # ── Task functions ───────────────────────────────────────────────────────────
 
-def _get_trade_date(ds: str) -> date:
-    """Airflow ds 是排程日，期交所資料是當天，直接使用。"""
-    return datetime.strptime(ds, "%Y-%m-%d").date()
+def _get_trade_date(**context) -> date:
+    """
+    回傳正確的交易日期（台北時間）。
+
+    Airflow 2.x 中：
+    - 排程執行：logical_date = data_interval_start（比執行日少一期），
+      改用 data_interval_end 取得實際排程觸發的日期。
+    - 手動 trigger（external_trigger=True）：logical_date = 使用者指定日期，
+      直接使用即可。
+    """
+    dag_run = context.get("dag_run")
+    if dag_run is not None and getattr(dag_run, "external_trigger", False):
+        # 手動 trigger：logical_date 就是使用者指定的日期
+        return context["logical_date"].astimezone(_TAIPEI).date()
+    # 排程執行：data_interval_end = 本次排程觸發時刻 = 當天 17:00 台北時間
+    end = context.get("data_interval_end")
+    if end is not None:
+        return end.astimezone(_TAIPEI).date()
+    # fallback
+    return datetime.now(_TAIPEI).date()
 
 
-def run_futures(ds: str, **_):
+def run_futures(**context):
     from agents import taifex_futures
-    taifex_futures.run(_get_trade_date(ds))
+    taifex_futures.run(_get_trade_date(**context))
 
 
-def run_options(ds: str, **_):
+def run_options(**context):
     from agents import taifex_options
-    taifex_options.run(_get_trade_date(ds))
+    taifex_options.run(_get_trade_date(**context))
 
 
-def run_pcr(ds: str, **_):
+def run_pcr(**context):
     from agents import taifex_pcr
-    taifex_pcr.run(_get_trade_date(ds))
+    taifex_pcr.run(_get_trade_date(**context))
 
 
-def run_institutional(ds: str, **_):
+def run_institutional(**context):
     from agents import taifex_institutional
-    taifex_institutional.run(_get_trade_date(ds))
+    taifex_institutional.run(_get_trade_date(**context))
 
 
-def run_large_trader(ds: str, **_):
+def run_large_trader(**context):
     from agents import taifex_large_trader
-    taifex_large_trader.run(_get_trade_date(ds))
+    taifex_large_trader.run(_get_trade_date(**context))
 
 
-def check_trading_day(ds: str, **_) -> bool:
+def check_trading_day(**context) -> bool:
     """
     ShortCircuitOperator 用：確認當日是否為交易日。
     回傳 False 時 Airflow 會自動跳過所有下游 task（Skipped 狀態）。
     """
     from agents.market_calendar import is_trading_day
-    trade_date = _get_trade_date(ds)
+    trade_date = _get_trade_date(**context)
     result = is_trading_day(trade_date)
     if not result:
         log.info("非交易日 %s，跳過所有爬蟲任務", trade_date)
     return result
 
 
-def run_derived(ds: str, **_):
+def run_derived(**context):
     from agents import derived_metrics
-    derived_metrics.run(_get_trade_date(ds))
+    derived_metrics.run(_get_trade_date(**context))
 
 
-def run_validator(ds: str, **_):
+def run_validator(**context):
     from agents import data_validator
-    data_validator.run(_get_trade_date(ds))
+    data_validator.run(_get_trade_date(**context))
 
 
 # ── DAG 定義 ─────────────────────────────────────────────────────────────────
@@ -200,4 +220,5 @@ with DAG(
     )
 
     # check_trading_day → 所有 fetch 並行 → derived_metrics → validate
-    t_check >> [t_futures, t_options, t_pcr, t_institutional, t_large_trader] >> t_derived >> t_validate
+    fetchers = [t_futures, t_options, t_pcr, t_institutional, t_large_trader]
+    t_check >> fetchers >> t_derived >> t_validate
