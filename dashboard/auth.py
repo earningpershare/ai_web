@@ -22,8 +22,6 @@ def _hide_page(page_name: str):
         del pages[k]
 
 
-_hide_page("verify_email")
-
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 _COOKIE_KEY = "auth_token"
 _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
@@ -283,6 +281,7 @@ def _show_locked_wall(reason: str, required: str = "pro"):
 
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
+    _hide_page("verify_email")
 
     # ── 從 cookie 還原 session（新分頁時）─────────────────────────
     # 第一次載入：注入 JS 讀 cookie 並用 query_params 回傳 token
