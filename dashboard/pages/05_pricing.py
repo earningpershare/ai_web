@@ -1,17 +1,74 @@
 """
-方案與訂閱 — 三方案定價頁面
+方案與訂閱 — 三方案定價頁面 + 綠界付款
 """
+import os
+
 import streamlit as st
+import streamlit.components.v1 as components
+import requests as _requests
+
 from auth import auth_sidebar, is_logged_in, has_plan, show_login_modal, current_plan, PLAN_LABEL
 
 st.set_page_config(page_title="方案說明", page_icon="💎", layout="wide")
 auth_sidebar()
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+# ── 付款結果處理 ─────────────────────────────────────────────────────────────
+
+if st.query_params.get("payment_result"):
+    st.query_params.clear()
+    # 重新從 API 拉取最新 plan
+    token = st.session_state.get("token", "")
+    if token:
+        try:
+            r = _requests.get(
+                f"{API_URL}/auth/me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            if r.ok:
+                data = r.json()
+                st.session_state["plan"] = data["plan"]
+                if data["plan"] != "free":
+                    st.success(f"🎉 付款成功！您已升級為 **{PLAN_LABEL.get(data['plan'], data['plan'])}**")
+                else:
+                    st.warning("付款處理中，請稍後重新整理頁面確認")
+        except Exception:
+            pass
 
 st.title("💎 方案說明")
 st.caption("選擇適合您的方案，隨時可以升級")
 st.divider()
 
 cur_plan = current_plan()
+
+
+# ── 付款函式 ─────────────────────────────────────────────────────────────────
+
+def _start_payment(plan_key: str):
+    """呼叫 API 建立訂單，取得綠界表單後跳轉"""
+    token = st.session_state.get("token", "")
+    if not token:
+        st.error("請先登入")
+        return
+    try:
+        r = _requests.post(
+            f"{API_URL}/payment/create-order",
+            json={"plan": plan_key},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        if r.ok:
+            data = r.json()
+            # 用 iframe 提交綠界表單
+            components.html(data["html"], height=0)
+        else:
+            detail = r.json().get("detail", "建立訂單失敗") if r.headers.get("content-type", "").startswith("application/json") else r.text
+            st.error(detail)
+    except Exception as e:
+        st.error(f"付款請求失敗：{e}")
+
 
 # ── 三欄定價卡 ────────────────────────────────────────────────────────────────
 
@@ -71,7 +128,7 @@ with col_pro:
           <div style="font-size:32px;font-weight:bold;color:#4f8ef7;margin:8px 0">
             NT$88<span style="font-size:16px;color:#888"> / 月</span>
           </div>
-          <div style="color:#888;font-size:13px;margin-bottom:20px">隨時取消，無綁約</div>
+          <div style="color:#888;font-size:13px;margin-bottom:20px">信用卡自動扣款，隨時可取消</div>
           <hr style="border-color:#1e3a5f;margin:16px 0">
           <div style="text-align:left;color:#ccc;font-size:14px;line-height:2.2">
             ✅ 基礎版所有功能<br>
@@ -88,14 +145,14 @@ with col_pro:
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
     if is_current:
         st.button("目前方案", key="_cur_pro", disabled=True, use_container_width=True)
+    elif not is_logged_in():
+        if st.button("登入後訂閱", key="_login_pro", use_container_width=True, type="primary"):
+            show_login_modal()
+    elif cur_plan == "ultimate":
+        st.button("已擁有更高方案", key="_higher_pro", disabled=True, use_container_width=True)
     else:
-        st.button(
-            "即將開放訂閱" if not is_logged_in() else "升級進階版（即將開放）",
-            key="_sub_pro",
-            use_container_width=True,
-            type="primary",
-            disabled=True,
-        )
+        if st.button("升級進階版 — NT$88/月", key="_sub_pro", use_container_width=True, type="primary"):
+            _start_payment("pro")
 
 # ─ 終極版 ─
 with col_ult:
@@ -130,13 +187,27 @@ with col_ult:
     st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
     if is_current:
         st.button("目前方案", key="_cur_ult", disabled=True, use_container_width=True)
+    elif not is_logged_in():
+        if st.button("登入後購買", key="_login_ult", use_container_width=True):
+            show_login_modal()
     else:
-        st.button(
-            "即將開放購買",
-            key="_sub_ult",
-            use_container_width=True,
-            disabled=True,
-        )
+        if st.button("購買終極版 — NT$1,688", key="_sub_ult", use_container_width=True, type="primary"):
+            _start_payment("ultimate")
+
+st.divider()
+
+# ── 優惠碼兌換 ───────────────────────────────────────────────────────────────
+
+if is_logged_in() and cur_plan == "free":
+    with st.expander("🎟️ 有優惠碼？在此兌換"):
+        promo_input = st.text_input("輸入優惠碼", key="_promo_input", placeholder="例如：FRIEND2026")
+        if st.button("兌換", key="_btn_redeem", use_container_width=True):
+            if not promo_input:
+                st.error("請輸入優惠碼")
+            else:
+                # 直接用現有的 register 後端 promo_code 邏輯不適合
+                # 需要獨立的兌換端點，先顯示提示
+                st.info("優惠碼兌換功能開發中，請聯繫管理員手動升級")
 
 st.divider()
 
@@ -144,10 +215,10 @@ with st.expander("❓ 常見問題"):
     st.markdown(
         """
         **Q：付款方式？**
-        A：目前金流串接建置中，正式開放後將支援信用卡、轉帳等常見方式。
+        A：使用信用卡付款（VISA / MasterCard / JCB），透過綠界科技安全處理。
 
         **Q：進階版可以取消嗎？**
-        A：可以，訂閱期滿後不會自動續訂，無任何綁約。
+        A：可以，訂閱期滿後不會自動續訂，無任何綁約。如需取消請聯繫管理員。
 
         **Q：終極版買斷是什麼意思？**
         A：一次性支付 NT$1,688，即可永久享有終極版所有功能，無需每月繳費。
@@ -159,6 +230,9 @@ with st.expander("❓ 常見問題"):
         **Q：資料來源是否可靠？**
         A：所有數據均直接源自台灣期貨交易所（TAIFEX）每日公開揭露資訊，
         本站僅做整理與視覺化呈現，不修改原始數據。
+
+        **Q：付款安全嗎？**
+        A：付款透過綠界科技（ECPay）處理，本站不會儲存任何信用卡資訊。
         """
     )
 

@@ -60,6 +60,7 @@ def _get_profile(user_id: str) -> dict:
 
 
 def _get_active_subscription(user_id: str) -> dict | None:
+    """取得有效訂閱；若已過期則自動降級為 free"""
     sb = get_supabase()
     resp = (
         sb.table("user_subscriptions")
@@ -70,7 +71,27 @@ def _get_active_subscription(user_id: str) -> dict | None:
         .limit(1)
         .execute()
     )
-    return resp.data[0] if resp.data else None
+    if not resp.data:
+        return None
+
+    sub = resp.data[0]
+    expires = sub.get("expires_at")
+    if expires:
+        expires_dt = datetime.fromisoformat(expires)
+        if expires_dt < datetime.now(timezone.utc):
+            # 訂閱已過期 → 降級
+            sb.table("user_subscriptions").update({"status": "expired"}).eq(
+                "user_id", user_id
+            ).eq("status", "active").execute()
+            sb.table("user_profiles").update({"plan": "free"}).eq("id", user_id).execute()
+            sb.table("subscription_events").insert({
+                "user_id": user_id,
+                "event_type": "subscription_expired",
+                "to_plan": "free",
+            }).execute()
+            log.info("Subscription expired for user %s, downgraded to free", user_id)
+            return None
+    return sub
 
 
 # ── schemas ───────────────────────────────────────────────────────────────────
@@ -268,6 +289,10 @@ def login(body: LoginRequest, request: Request):
         "user_agent": ua,
     }).execute()
 
+    # 檢查訂閱是否過期（會自動降級）
+    _get_active_subscription(user_id)
+    # 重新讀取 plan（可能已被降級）
+    profile = _get_profile(user_id)
     plan = (profile.get("plan") or "free")
     email_verified = bool(user.email_confirmed_at)
 
