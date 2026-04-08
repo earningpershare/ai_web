@@ -117,7 +117,7 @@ def register(body: RegisterRequest, request: Request):
             "email": email,
             "password": body.password,
             "options": {
-                "email_redirect_to": f"{FRONTEND_URL}/verify_email",
+                "email_redirect_to": f"{FRONTEND_URL}/?verified=1",
                 "data": {"display_name": body.display_name or email.split("@")[0]},
             },
         })

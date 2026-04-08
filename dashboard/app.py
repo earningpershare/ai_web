@@ -19,9 +19,12 @@ st.set_page_config(
 
 auth_sidebar()
 
-# 從驗證信頁面跳回來時，自動彈出登入框
-if st.session_state.pop("_auto_show_login", False) and not is_logged_in():
-    show_login_modal()
+# 從驗證信點擊後 redirect 回首頁（?verified=1），自動清參數並彈出登入框
+if st.query_params.get("verified") == "1":
+    st.query_params.clear()
+    st.toast("✅ 信箱驗證成功！請登入開始使用。", icon="✅")
+    if not is_logged_in():
+        show_login_modal()
 
 st.title("🚀 台指天空 SpaceTFX")
 st.caption("從高空俯視台指市場　TAIFEX 籌碼數據平台")
