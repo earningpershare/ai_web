@@ -99,16 +99,24 @@ with c_win:
         <div style="text-align:center;padding:16px;border:1px solid #333;border-radius:10px;">
             <div style="font-size:36px">🪟</div>
             <h4 style="margin:8px 0">Windows</h4>
-            <p style="color:#888;font-size:13px">v2rayN</p>
-            <p style="color:#666;font-size:12px">免安裝版 (144 MB)</p>
+            <p style="color:#888;font-size:13px">v2rayN (分 4 檔下載)</p>
+            <p style="color:#666;font-size:12px">下載後用指令合併</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.link_button(
-        "下載 v2rayN",
-        f"{DOWNLOAD_BASE}/v2rayN-windows-64.zip",
-        use_container_width=True,
+    st.link_button("Part 1 (45 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-aa", use_container_width=True)
+    st.link_button("Part 2 (45 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ab", use_container_width=True)
+    st.link_button("Part 3 (45 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ac", use_container_width=True)
+    st.link_button("Part 4 (8.3 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ad", use_container_width=True)
+    st.markdown(
+        """
+        <small style="color:#888">
+        下載完 4 個檔案後，開 CMD 執行：<br>
+        <code>copy /b v2rayN-part-aa+v2rayN-part-ab+v2rayN-part-ac+v2rayN-part-ad v2rayN.zip</code>
+        </small>
+        """,
+        unsafe_allow_html=True,
     )
 
 with c_mac:
