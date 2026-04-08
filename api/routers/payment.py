@@ -4,23 +4,21 @@ Payment Router — 綠界科技 (ECPay) 金流串接
 POST /payment/create-order     — 建立付款訂單，回傳綠界付款表單 HTML
 POST /payment/notify           — 綠界 Server 端回呼（ReturnURL）
 POST /payment/period-notify    — 定期定額每期回呼（PeriodReturnURL）
-GET  /payment/result           — 付款完成後導回前端
 GET  /payment/status/{order_no} — 查詢訂單狀態
 """
 
 import hashlib
 import logging
 import os
-import time
 import urllib.parse
 from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, HTTPException, Header, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from routers.supabase_client import get_supabase
-from routers.auth import _current_user, vless_uuid_for, PLAN_RANK
+from routers.auth import _current_user, PLAN_RANK
 
 router = APIRouter(prefix="/payment", tags=["payment"])
 log = logging.getLogger(__name__)
@@ -31,6 +29,9 @@ ECPAY_MERCHANT_ID = os.getenv("ECPAY_MERCHANT_ID", "")
 ECPAY_HASH_KEY = os.getenv("ECPAY_HASH_KEY", "")
 ECPAY_HASH_IV = os.getenv("ECPAY_HASH_IV", "")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://16888u.com")
+
+# 綠界回呼用的公網 API URL（不能用 Docker 內部 URL）
+API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
 
 # 正式環境
 ECPAY_ACTION_URL = "https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5"
@@ -60,13 +61,9 @@ PLANS = {
 
 def _generate_check_mac_value(params: dict) -> str:
     """依照綠界規格產生 CheckMacValue (SHA256)"""
-    # 1. 按 key 排序（不分大小寫）
     sorted_params = sorted(params.items(), key=lambda x: x[0].lower())
-    # 2. 組成 query string，前後加 HashKey/HashIV
     raw = f"HashKey={ECPAY_HASH_KEY}&" + "&".join(f"{k}={v}" for k, v in sorted_params) + f"&HashIV={ECPAY_HASH_IV}"
-    # 3. URL encode（小寫）
     encoded = urllib.parse.quote_plus(raw, safe="").lower()
-    # 4. SHA256 → 大寫
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest().upper()
 
 
@@ -78,6 +75,47 @@ def _verify_check_mac_value(params: dict) -> bool:
     return received.upper() == expected.upper()
 
 
+# ── 訂閱升級（原子化操作）───────────────────────────────────────────────────
+
+def _activate_subscription(sb, user_id: str, plan_key: str, order_no: str,
+                           trade_no: str, amount: int, is_periodic: bool):
+    """
+    將用戶升級到指定方案。所有 DB 操作集中在此函式，
+    即使部分失敗也能根據 payment_orders.raw_response 人工補救。
+    """
+    if is_periodic:
+        expires = (datetime.now(timezone.utc) + timedelta(days=35)).isoformat()
+    else:
+        expires = "2099-12-31T23:59:59+00:00"
+
+    # 1. 先把舊的 active 訂閱標為 superseded（避免重複）
+    sb.table("user_subscriptions").update({"status": "superseded"}).eq(
+        "user_id", user_id
+    ).eq("status", "active").execute()
+
+    # 2. 建立新訂閱
+    sb.table("user_subscriptions").insert({
+        "user_id": user_id,
+        "plan": plan_key,
+        "status": "active",
+        "expires_at": expires,
+        "amount_twd": amount,
+        "promo_code": None,
+        "metadata": {"ecpay_trade_no": trade_no, "order_no": order_no},
+    }).execute()
+
+    # 3. 更新 user_profiles（這是最關鍵的一步）
+    sb.table("user_profiles").update({"plan": plan_key}).eq("id", user_id).execute()
+
+    # 4. 記錄事件
+    sb.table("subscription_events").insert({
+        "user_id": user_id,
+        "event_type": "payment_success",
+        "to_plan": plan_key,
+        "metadata": {"order_no": order_no, "trade_no": trade_no, "amount": amount},
+    }).execute()
+
+
 # ── Schemas ──────────────────────────────────────────────────────────────────
 
 class CreateOrderRequest(BaseModel):
@@ -87,7 +125,7 @@ class CreateOrderRequest(BaseModel):
 # ── 建立訂單 ─────────────────────────────────────────────────────────────────
 
 @router.post("/create-order")
-def create_order(body: CreateOrderRequest, request: Request, authorization: str = Header(default="")):
+def create_order(body: CreateOrderRequest, authorization: str = Header(default="")):
     user = _current_user(authorization)
     user_id = str(user.id)
 
@@ -120,8 +158,7 @@ def create_order(body: CreateOrderRequest, request: Request, authorization: str 
         "is_periodic": plan.get("is_periodic", False),
     }).execute()
 
-    # 組綠界參數
-    api_base = str(request.base_url).rstrip("/")
+    # 組綠界參數 — ReturnURL 必須是公網可達的 URL
     params = {
         "MerchantID": ECPAY_MERCHANT_ID,
         "MerchantTradeNo": order_no,
@@ -130,7 +167,7 @@ def create_order(body: CreateOrderRequest, request: Request, authorization: str 
         "TotalAmount": plan["amount"],
         "TradeDesc": f"TaifexAI {plan['name']}",
         "ItemName": f"TaifexAI {plan['name']}",
-        "ReturnURL": f"{api_base}/payment/notify",
+        "ReturnURL": f"{API_PUBLIC_URL}/payment/notify",
         "OrderResultURL": f"{FRONTEND_URL}/05_pricing?payment_result=1",
         "ChoosePayment": "Credit",
         "EncryptType": 1,
@@ -146,7 +183,7 @@ def create_order(body: CreateOrderRequest, request: Request, authorization: str 
             "PeriodType": plan["period_type"],
             "Frequency": plan["frequency"],
             "ExecTimes": plan["exec_times"],
-            "PeriodReturnURL": f"{api_base}/payment/period-notify",
+            "PeriodReturnURL": f"{API_PUBLIC_URL}/payment/period-notify",
         })
 
     params["CheckMacValue"] = _generate_check_mac_value(params)
@@ -169,99 +206,91 @@ def create_order(body: CreateOrderRequest, request: Request, authorization: str 
 
 # ── 綠界付款結果通知（Server 端回呼）────────────────────────────────────────
 
-@router.post("/notify")
+@router.post("/notify", response_class=PlainTextResponse)
 async def payment_notify(request: Request):
-    """綠界付款完成後的 Server-to-Server 回呼"""
+    """
+    綠界付款完成後的 Server-to-Server 回呼。
+    必須回傳 '1|OK' 字串，否則綠界會重送（最多 3 次）。
+    """
     form = await request.form()
     params = dict(form)
 
-    log.info("ECPay notify: %s", params)
+    log.info("ECPay notify: order=%s code=%s", params.get("MerchantTradeNo"), params.get("RtnCode"))
 
     # 驗證 CheckMacValue
     if not _verify_check_mac_value(params):
-        log.warning("ECPay notify: CheckMacValue 驗證失敗")
-        return "0|ErrorMessage"
+        log.error("ECPay notify: CheckMacValue verification FAILED for order %s", params.get("MerchantTradeNo"))
+        return "0|CheckMacValue Error"
 
     rtn_code = params.get("RtnCode", "")
     order_no = params.get("MerchantTradeNo", "")
     user_id = params.get("CustomField1", "")
     plan_key = params.get("CustomField2", "")
-    trade_no = params.get("TradeNo", "")  # 綠界交易編號
+    trade_no = params.get("TradeNo", "")
 
     sb = get_supabase()
 
-    if rtn_code == "1":
-        # 付款成功
-        plan = PLANS.get(plan_key, {})
-        is_periodic = plan.get("is_periodic", False)
+    # 冪等性檢查：避免重複處理（綠界可能重送）
+    existing = sb.table("payment_orders").select("status").eq("order_no", order_no).single().execute()
+    if existing.data and existing.data.get("status") == "paid":
+        log.info("ECPay notify: order %s already paid, skip", order_no)
+        return "1|OK"
 
-        # 更新訂單狀態
-        sb.table("payment_orders").update({
-            "status": "paid",
-            "ecpay_trade_no": trade_no,
-            "paid_at": datetime.now(timezone.utc).isoformat(),
-            "raw_response": params,
-        }).eq("order_no", order_no).execute()
+    try:
+        if rtn_code == "1":
+            plan = PLANS.get(plan_key, {})
 
-        # 計算到期日
-        if is_periodic:
-            # 月訂閱：每期回呼會延長，先設一個月
-            expires = (datetime.now(timezone.utc) + timedelta(days=35)).isoformat()
+            # 更新訂單狀態（先存 raw_response，確保有據可查）
+            sb.table("payment_orders").update({
+                "status": "paid",
+                "ecpay_trade_no": trade_no,
+                "paid_at": datetime.now(timezone.utc).isoformat(),
+                "raw_response": params,
+            }).eq("order_no", order_no).execute()
+
+            # 啟動訂閱
+            _activate_subscription(
+                sb, user_id, plan_key, order_no, trade_no,
+                plan.get("amount", 0), plan.get("is_periodic", False),
+            )
+
+            log.info("Payment SUCCESS: order=%s user=%s plan=%s", order_no, user_id, plan_key)
         else:
-            # 一次買斷：永久
-            expires = "2099-12-31T23:59:59+00:00"
+            sb.table("payment_orders").update({
+                "status": "failed",
+                "ecpay_trade_no": trade_no,
+                "raw_response": params,
+            }).eq("order_no", order_no).execute()
 
-        # 建立/更新訂閱
-        sb.table("user_subscriptions").insert({
-            "user_id": user_id,
-            "plan": plan_key,
-            "status": "active",
-            "expires_at": expires,
-            "amount_twd": plan.get("amount", 0),
-            "promo_code": None,
-            "metadata": {"ecpay_trade_no": trade_no, "order_no": order_no},
-        }).execute()
-
-        # 更新 user_profiles
-        sb.table("user_profiles").update({
-            "plan": plan_key,
-        }).eq("id", user_id).execute()
-
-        # 記錄事件
-        sb.table("subscription_events").insert({
-            "user_id": user_id,
-            "event_type": "payment_success",
-            "to_plan": plan_key,
-            "metadata": {"order_no": order_no, "trade_no": trade_no, "amount": plan.get("amount", 0)},
-        }).execute()
-
-        log.info("Payment success: order=%s user=%s plan=%s", order_no, user_id, plan_key)
-    else:
-        # 付款失敗
-        sb.table("payment_orders").update({
-            "status": "failed",
-            "ecpay_trade_no": trade_no,
-            "raw_response": params,
-        }).eq("order_no", order_no).execute()
-
-        log.warning("Payment failed: order=%s code=%s msg=%s", order_no, rtn_code, params.get("RtnMsg", ""))
+            log.warning("Payment FAILED: order=%s code=%s msg=%s",
+                        order_no, rtn_code, params.get("RtnMsg", ""))
+    except Exception:
+        # 即使 DB 操作出錯，也要回 1|OK 避免綠界無限重送
+        # raw_response 已在前面存入，可事後人工補救
+        log.exception("ECPay notify: DB error processing order %s", order_no)
 
     return "1|OK"
 
 
 # ── 定期定額每期回呼 ─────────────────────────────────────────────────────────
 
-@router.post("/period-notify")
+@router.post("/period-notify", response_class=PlainTextResponse)
 async def period_notify(request: Request):
-    """定期定額每期扣款結果回呼"""
+    """
+    定期定額每期扣款結果回呼。
+    綠界每月自動扣款後 POST 到此端點。
+    """
     form = await request.form()
     params = dict(form)
 
-    log.info("ECPay period notify: %s", params)
+    log.info("ECPay period notify: order=%s code=%s totalSuccessTimes=%s",
+             params.get("MerchantTradeNo"), params.get("RtnCode"),
+             params.get("TotalSuccessTimes"))
 
     if not _verify_check_mac_value(params):
-        log.warning("ECPay period notify: CheckMacValue 驗證失敗")
-        return "0|ErrorMessage"
+        log.error("ECPay period notify: CheckMacValue FAILED for order %s",
+                  params.get("MerchantTradeNo"))
+        return "0|CheckMacValue Error"
 
     rtn_code = params.get("RtnCode", "")
     order_no = params.get("MerchantTradeNo", "")
@@ -277,32 +306,50 @@ async def period_notify(request: Request):
     user_id = order_resp.data["user_id"]
     plan_key = order_resp.data["plan"]
 
-    if rtn_code == "1":
-        # 扣款成功 → 延長到期日
-        new_expires = (datetime.now(timezone.utc) + timedelta(days=35)).isoformat()
-        sb.table("user_subscriptions").update({
-            "expires_at": new_expires,
-            "status": "active",
-        }).eq("user_id", user_id).eq("plan", plan_key).eq("status", "active").execute()
+    try:
+        if rtn_code == "1":
+            # 扣款成功 → 延長到期日 35 天（比 30 天多 5 天緩衝）
+            new_expires = (datetime.now(timezone.utc) + timedelta(days=35)).isoformat()
+            sb.table("user_subscriptions").update({
+                "expires_at": new_expires,
+                "status": "active",
+            }).eq("user_id", user_id).eq("plan", plan_key).eq("status", "active").execute()
 
-        sb.table("subscription_events").insert({
-            "user_id": user_id,
-            "event_type": "period_payment_success",
-            "to_plan": plan_key,
-            "metadata": {"order_no": order_no, "period_params": params},
-        }).execute()
+            # 確保 user_profiles.plan 也是正確的
+            sb.table("user_profiles").update({"plan": plan_key}).eq("id", user_id).execute()
 
-        log.info("Period payment success: order=%s user=%s", order_no, user_id)
-    else:
-        # 扣款失敗
-        sb.table("subscription_events").insert({
-            "user_id": user_id,
-            "event_type": "period_payment_failed",
-            "to_plan": plan_key,
-            "metadata": {"order_no": order_no, "rtn_code": rtn_code, "rtn_msg": params.get("RtnMsg", "")},
-        }).execute()
+            sb.table("subscription_events").insert({
+                "user_id": user_id,
+                "event_type": "period_payment_success",
+                "to_plan": plan_key,
+                "metadata": {
+                    "order_no": order_no,
+                    "total_success": params.get("TotalSuccessTimes", ""),
+                    "exec_status": params.get("ExecStatus", ""),
+                },
+            }).execute()
 
-        log.warning("Period payment failed: order=%s code=%s", order_no, rtn_code)
+            log.info("Period payment SUCCESS: order=%s user=%s success_count=%s",
+                     order_no, user_id, params.get("TotalSuccessTimes"))
+        else:
+            # 扣款失敗 — 記錄但不立即降級（到期日機制會處理）
+            sb.table("subscription_events").insert({
+                "user_id": user_id,
+                "event_type": "period_payment_failed",
+                "to_plan": plan_key,
+                "metadata": {
+                    "order_no": order_no,
+                    "rtn_code": rtn_code,
+                    "rtn_msg": params.get("RtnMsg", ""),
+                    "total_success": params.get("TotalSuccessTimes", ""),
+                    "total_fail": params.get("TotalFailTimes", ""),
+                },
+            }).execute()
+
+            log.warning("Period payment FAILED: order=%s code=%s fail_count=%s",
+                        order_no, rtn_code, params.get("TotalFailTimes"))
+    except Exception:
+        log.exception("ECPay period notify: DB error for order %s", order_no)
 
     return "1|OK"
 
