@@ -61,6 +61,8 @@ st.divider()
 
 # ── 客戶端下載 ───────────────────────────────────────────────────────────────
 
+DOWNLOAD_BASE = "https://16888u.com/downloads"
+
 st.subheader("📱 客戶端 App 下載")
 
 c_ios, c_android, c_win, c_mac = st.columns(4)
@@ -85,7 +87,7 @@ with c_android:
             <div style="font-size:36px">🤖</div>
             <h4 style="margin:8px 0">Android</h4>
             <p style="color:#888;font-size:13px">v2rayNG</p>
-            <p style="color:#666;font-size:12px">Google Play 或<br>GitHub 下載 APK</p>
+            <p style="color:#666;font-size:12px">Google Play 搜尋<br>"v2rayNG"</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -98,10 +100,15 @@ with c_win:
             <div style="font-size:36px">🪟</div>
             <h4 style="margin:8px 0">Windows</h4>
             <p style="color:#888;font-size:13px">v2rayN</p>
-            <p style="color:#666;font-size:12px">GitHub 下載<br>免安裝版</p>
+            <p style="color:#666;font-size:12px">免安裝版 (144 MB)</p>
         </div>
         """,
         unsafe_allow_html=True,
+    )
+    st.link_button(
+        "下載 v2rayN",
+        f"{DOWNLOAD_BASE}/v2rayN-windows-64.zip",
+        use_container_width=True,
     )
 
 with c_mac:
@@ -121,73 +128,72 @@ st.divider()
 
 # ── Claude Code 離線安裝 ──────────────────────────────────────────────────────
 
-st.subheader("🤖 Claude Code 離線安裝教學")
+st.subheader("🤖 Claude Code 離線安裝")
 
-st.markdown("在無法直接存取外網的電腦上安裝 Claude Code。")
+st.markdown("在無法直接存取外網的電腦上安裝 Claude Code，下載以下兩個檔案即可。")
 
-with st.expander("**Step 1 — 在有網路的電腦打包安裝檔**", expanded=False):
+dl1, dl2 = st.columns(2)
+with dl1:
     st.markdown(
         """
-        在家裡或其他有網路的電腦上執行：
-
-        ```bash
-        # 1. 建立打包資料夾
-        mkdir claude-code-offline && cd claude-code-offline
-
-        # 2. 下載 Node.js Windows 安裝檔 (如目標是 Windows)
-        curl -o node-v22-x64.msi https://nodejs.org/dist/v22.14.0/node-v22.14.0-x64.msi
-
-        # 3. 打包 Claude Code（含依賴的完整方式）
-        #    先全域安裝，再整個資料夾打包
-        npm install -g @anthropic-ai/claude-code
-        #    Windows: 複製 %APPDATA%\\npm\\node_modules\\@anthropic-ai 整個資料夾
-        #    macOS/Linux: 複製 $(npm root -g)/@anthropic-ai 整個資料夾
-
-        # 4. 把 node-v22-x64.msi + @anthropic-ai 資料夾放進 USB 或上傳
-        ```
-        """
+        <div style="text-align:center;padding:20px;border:1px solid #333;border-radius:10px;">
+            <div style="font-size:36px">📦</div>
+            <h4 style="margin:8px 0">Node.js v22 安裝檔</h4>
+            <p style="color:#888;font-size:13px">Windows x64 MSI (30 MB)</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.link_button(
+        "下載 Node.js",
+        f"{DOWNLOAD_BASE}/node-v22.14.0-x64.msi",
+        use_container_width=True,
     )
 
-with st.expander("**Step 2 — 在目標電腦離線安裝**", expanded=False):
+with dl2:
     st.markdown(
         """
-        ```bash
-        # 1. 安裝 Node.js（雙擊 MSI 安裝檔）
-
-        # 2. 複製 @anthropic-ai 資料夾到全域 node_modules
-        #    Windows: 複製到 %APPDATA%\\npm\\node_modules\\
-        #    macOS/Linux: 複製到 $(npm root -g)/
-
-        # 3. 建立全域指令連結
-        npm link -g @anthropic-ai/claude-code
-        ```
-
-        安裝完成後執行 `claude --version` 確認。
-        """
+        <div style="text-align:center;padding:20px;border:1px solid #333;border-radius:10px;">
+            <div style="font-size:36px">🤖</div>
+            <h4 style="margin:8px 0">Claude Code v2.1.96</h4>
+            <p style="color:#888;font-size:13px">npm 離線包 (18.5 MB)</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.link_button(
+        "下載 Claude Code",
+        f"{DOWNLOAD_BASE}/anthropic-ai-claude-code-2.1.96.tgz",
+        use_container_width=True,
     )
 
-with st.expander("**Step 3 — 設定代理與 API Key**", expanded=False):
+st.markdown("")
+
+with st.expander("**安裝步驟**", expanded=True):
     st.markdown(
         f"""
-        開啟代理客戶端（v2rayN 等）連上本服務後：
+**Step 1** — 安裝 Node.js（雙擊下載的 MSI 安裝檔，一路 Next）
 
-        ```bash
-        # 設定代理（v2rayN 預設 HTTP port）
-        export HTTPS_PROXY=http://127.0.0.1:10809
+**Step 2** — 安裝 Claude Code（開啟 CMD 或 PowerShell）：
+```
+npm install -g anthropic-ai-claude-code-2.1.96.tgz
+```
 
-        # 設定 Anthropic API Key
-        export ANTHROPIC_API_KEY=sk-ant-your-key-here
+**Step 3** — 開啟 v2rayN 連上代理後，設定環境變數並啟動：
 
-        # 啟動 Claude Code
-        claude
-        ```
+```powershell
+# PowerShell
+$env:HTTPS_PROXY = "http://127.0.0.1:10809"
+$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
+claude
+```
 
-        **Windows PowerShell 版本：**
-        ```powershell
-        $env:HTTPS_PROXY = "http://127.0.0.1:10809"
-        $env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
-        claude
-        ```
+```bash
+# Git Bash / WSL
+export HTTPS_PROXY=http://127.0.0.1:10809
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+claude
+```
         """
     )
 
