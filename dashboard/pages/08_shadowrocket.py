@@ -1,11 +1,13 @@
 """
-Shadowrocket VPN — 一鍵匯入代理連線
+Shadowrocket VPN — 一鍵匯入代理連線（每人專屬 UUID）
 """
 import io
 import base64
+import os
 
 import streamlit as st
 import qrcode
+import requests as _requests
 
 from auth import auth_sidebar, require_plan
 
@@ -13,15 +15,38 @@ st.set_page_config(page_title="Shadowrocket VPN", page_icon="🚀", layout="wide
 auth_sidebar()
 require_plan("pro")
 
-# ── 連線參數 ─────────────────────────────────────────────────────────────────
+# ── 取得個人 VLESS UUID ─────────────────────────────────────────────────────
 
-VLESS_UUID = "1f21e008-779a-45ee-aae1-a1e6e46a879b"
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 VLESS_ADDR = "16888u.com"
 VLESS_PORT = 443
 VLESS_PATH = "/proxy-ws"
 
+
+def _get_my_vless_uuid() -> str | None:
+    token = st.session_state.get("token", "")
+    if not token:
+        return None
+    try:
+        r = _requests.get(
+            f"{API_URL}/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.ok:
+            return r.json().get("vless_uuid")
+    except Exception:
+        pass
+    return None
+
+
+user_uuid = _get_my_vless_uuid()
+if not user_uuid:
+    st.error("無法取得個人連線金鑰，請重新登入")
+    st.stop()
+
 VLESS_URI = (
-    f"vless://{VLESS_UUID}@{VLESS_ADDR}:{VLESS_PORT}"
+    f"vless://{user_uuid}@{VLESS_ADDR}:{VLESS_PORT}"
     f"?encryption=none&security=tls&type=ws&host={VLESS_ADDR}&path=%2Fproxy-ws"
     f"#TaifexAI-Proxy"
 )
@@ -99,7 +124,7 @@ with st.expander("🔧 手動設定參數（進階）", expanded=False):
         | **類型** | VLESS |
         | **地址** | `{VLESS_ADDR}` |
         | **Port** | `{VLESS_PORT}` |
-        | **UUID** | `{VLESS_UUID}` |
+        | **UUID** | `{user_uuid}` |
         | **傳輸方式** | WebSocket |
         | **Path** | `{VLESS_PATH}` |
         | **TLS** | 開啟 |

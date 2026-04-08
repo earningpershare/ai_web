@@ -1,29 +1,59 @@
 """
-工具箱 — VPN 連線設定與 Claude Code 離線安裝
+工具箱 — VPN 連線設定與 Claude Code 離線安裝（每人專屬 UUID）
 """
+import os
+
 import streamlit as st
+import requests as _requests
+
 from auth import auth_sidebar, require_plan
 
 st.set_page_config(page_title="工具箱", page_icon="🧰", layout="wide")
 auth_sidebar()
 require_plan("pro")
 
-st.title("🧰 工具箱")
-st.caption("代理連線設定與開發工具離線安裝")
-st.divider()
+# ── 取得個人 VLESS UUID ─────────────────────────────────────────────────────
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+
+def _get_my_vless_uuid() -> str | None:
+    token = st.session_state.get("token", "")
+    if not token:
+        return None
+    try:
+        r = _requests.get(
+            f"{API_URL}/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.ok:
+            return r.json().get("vless_uuid")
+    except Exception:
+        pass
+    return None
+
+
+user_uuid = _get_my_vless_uuid()
+if not user_uuid:
+    st.error("無法取得個人連線金鑰，請重新登入")
+    st.stop()
 
 # ── VLESS 連線資訊 ───────────────────────────────────────────────────────────
 
-VLESS_UUID = "1f21e008-779a-45ee-aae1-a1e6e46a879b"
 VLESS_ADDR = "16888u.com"
 VLESS_PORT = 443
 VLESS_PATH = "/proxy-ws"
 
 vless_uri = (
-    f"vless://{VLESS_UUID}@{VLESS_ADDR}:{VLESS_PORT}"
+    f"vless://{user_uuid}@{VLESS_ADDR}:{VLESS_PORT}"
     f"?encryption=none&security=tls&type=ws&host={VLESS_ADDR}&path=%2Fproxy-ws"
     f"#TaifexAI-Proxy"
 )
+
+st.title("🧰 工具箱")
+st.caption("代理連線設定與開發工具離線安裝")
+st.divider()
 
 st.subheader("🔗 代理連線")
 st.markdown("透過 VLESS + WebSocket + TLS 加密通道，安全存取外部服務。")
@@ -38,7 +68,7 @@ with col1:
         | **協定** | VLESS |
         | **地址** | `{VLESS_ADDR}` |
         | **Port** | `{VLESS_PORT}` |
-        | **UUID** | `{VLESS_UUID}` |
+        | **UUID** | `{user_uuid}` |
         | **傳輸方式** | WebSocket |
         | **Path** | `{VLESS_PATH}` |
         | **TLS** | 開啟 |
@@ -210,7 +240,7 @@ st.markdown(
     <div style="background:#1a1a2e;border:1px solid #333;border-radius:8px;padding:16px;margin-top:8px;">
         <h4 style="color:#e0e0e0;margin-top:0">⚠️ 注意事項</h4>
         <ul style="color:#aaa;font-size:14px;line-height:2;">
-            <li>此代理僅供授權用戶個人開發使用</li>
+            <li>此代理僅供授權用戶個人使用</li>
             <li>請勿用於大量影片串流，以避免超出流量額度</li>
             <li>UUID 為個人專屬，請勿分享給他人</li>
             <li>如連線異常請聯繫管理員</li>

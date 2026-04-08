@@ -10,12 +10,21 @@ POST /auth/resend-verification
 
 import logging
 import os
+import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Header, Request
 from pydantic import BaseModel, EmailStr
 
 from routers.supabase_client import get_supabase
+
+# 用固定 namespace + user_id 確定性生成 VLESS UUID，不需要 DB 欄位
+_VLESS_NAMESPACE = _uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+
+
+def vless_uuid_for(user_id: str) -> str:
+    """從 user_id 確定性產生唯一的 VLESS UUID"""
+    return str(_uuid.uuid5(_VLESS_NAMESPACE, user_id))
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = logging.getLogger(__name__)
@@ -278,17 +287,46 @@ def me(authorization: str = Header(default="")):
     profile = _get_profile(user_id)
     sub = _get_active_subscription(user_id)
 
+    plan = profile.get("plan", "free")
     return {
         "id": user_id,
         "email": user.email,
         "display_name": profile.get("display_name", ""),
-        "plan": profile.get("plan", "free"),
+        "plan": plan,
         "email_verified": bool(user.email_confirmed_at),
         "created_at": str(user.created_at)[:10] if user.created_at else None,
         "last_login_at": str(profile.get("last_login_at", ""))[:10] or None,
         "login_count": profile.get("login_count", 0),
         "subscription": sub,
+        "vless_uuid": vless_uuid_for(user_id) if PLAN_RANK.get(plan, 0) >= PLAN_RANK["pro"] else None,
     }
+
+
+XRAY_SYNC_SECRET = os.getenv("XRAY_SYNC_SECRET", "change-me-in-production")
+
+
+@router.get("/vless-clients")
+def vless_clients(secret: str = ""):
+    """供 Xray 同步腳本呼叫，回傳所有 pro+ 用戶的 VLESS UUID 與 email"""
+    if secret != XRAY_SYNC_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    sb = get_supabase()
+    resp = (
+        sb.table("user_profiles")
+        .select("id, display_name, plan")
+        .in_("plan", ["pro", "ultimate"])
+        .execute()
+    )
+
+    clients = []
+    for row in resp.data or []:
+        clients.append({
+            "id": vless_uuid_for(row["id"]),
+            "email": row.get("display_name", row["id"]),
+            "level": 0,
+        })
+    return {"clients": clients}
 
 
 class ResendByEmailRequest(BaseModel):
