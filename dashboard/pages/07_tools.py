@@ -99,8 +99,8 @@ with c_win:
         <div style="text-align:center;padding:16px;border:1px solid #333;border-radius:10px;">
             <div style="font-size:36px">🪟</div>
             <h4 style="margin:8px 0">Windows</h4>
-            <p style="color:#888;font-size:13px">v2rayN (分 4 檔下載)</p>
-            <p style="color:#666;font-size:12px">下載後用指令合併</p>
+            <p style="color:#888;font-size:13px">v2rayN 一鍵安裝</p>
+            <p style="color:#666;font-size:12px">下載 5 個檔案後<br>執行腳本自動設定</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -109,11 +109,12 @@ with c_win:
     st.link_button("Part 2 (45 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ab", use_container_width=True)
     st.link_button("Part 3 (45 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ac", use_container_width=True)
     st.link_button("Part 4 (8.3 MB)", f"{DOWNLOAD_BASE}/v2rayN-part-ad", use_container_width=True)
+    st.link_button("setup-v2rayN.ps1", f"{DOWNLOAD_BASE}/setup-v2rayN.ps1", use_container_width=True, type="primary")
     st.markdown(
         """
         <small style="color:#888">
-        下載完 4 個檔案後，開 CMD 執行：<br>
-        <code>copy /b v2rayN-part-aa+v2rayN-part-ab+v2rayN-part-ac+v2rayN-part-ad v2rayN.zip</code>
+        將 5 個檔案放同一資料夾，右鍵 setup-v2rayN.ps1 →
+        「用 PowerShell 執行」即可自動合併、解壓、設定。
         </small>
         """,
         unsafe_allow_html=True,
@@ -179,29 +180,24 @@ st.markdown("")
 
 with st.expander("**安裝步驟**", expanded=True):
     st.markdown(
-        f"""
-**Step 1** — 安裝 Node.js（雙擊下載的 MSI 安裝檔，一路 Next）
+        """
+**Step 1** — 雙擊 `node-v22.14.0-x64.msi`，一路 Next 安裝 Node.js
 
-**Step 2** — 安裝 Claude Code（開啟 CMD 或 PowerShell）：
-```
+**Step 2** — 開啟 PowerShell，cd 到下載目錄，執行：
+```powershell
 npm install -g anthropic-ai-claude-code-2.1.96.tgz
 ```
+> 這是離線安裝，不需要網路。裝完後 `claude --version` 驗證。
 
-**Step 3** — 開啟 v2rayN 連上代理後，設定環境變數並啟動：
-
+**Step 3** — 先確認 v2rayN 代理已啟動（系統匣右鍵 → 自動設定系統代理），然後：
 ```powershell
-# PowerShell
 $env:HTTPS_PROXY = "http://127.0.0.1:10809"
-$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
+$env:ANTHROPIC_API_KEY = "你的 API Key"
 claude
 ```
-
-```bash
-# Git Bash / WSL
-export HTTPS_PROXY=http://127.0.0.1:10809
-export ANTHROPIC_API_KEY=sk-ant-your-key-here
-claude
-```
+> 每次開新的 PowerShell 都要重設環境變數。如果想永久設定：
+> `[Environment]::SetEnvironmentVariable("HTTPS_PROXY", "http://127.0.0.1:10809", "User")`
+> `[Environment]::SetEnvironmentVariable("ANTHROPIC_API_KEY", "你的 API Key", "User")`
         """
     )
 
