@@ -15,7 +15,13 @@ VPS_USER="opc"
 VPS_IP="161.33.17.40"
 VPS_DIR="/home/opc/ai_web"
 COMPOSE_FILE="docker-compose.prod.yml"
-SERVICES="${1:-api dashboard}"
+INPUT="${1:-api dashboard}"
+# airflow 是 airflow-scheduler + airflow-webserver 的別名
+if [ "$INPUT" = "airflow" ]; then
+    SERVICES="airflow-scheduler airflow-webserver"
+else
+    SERVICES="$INPUT"
+fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[deploy]${NC} $1"; }
