@@ -216,8 +216,8 @@ def payment_checkout(order_no: str):
     這樣可以繞過 Streamlit iframe sandbox 無法跨視窗導航的限制。
     """
     sb = get_supabase()
-    resp = sb.table("payment_orders").select("raw_response, status").eq("order_no", order_no).single().execute()
-    if not resp.data:
+    resp = sb.table("payment_orders").select("raw_response, status").eq("order_no", order_no).maybe_single().execute()
+    if not resp or not resp.data:
         return HTMLResponse("<h2>找不到此訂單</h2>", status_code=404)
 
     if resp.data.get("status") != "pending":
@@ -426,8 +426,8 @@ def payment_status(order_no: str, authorization: str = Header(default="")):
     user_id = str(user.id)
 
     sb = get_supabase()
-    resp = sb.table("payment_orders").select("*").eq("order_no", order_no).eq("user_id", user_id).single().execute()
-    if not resp.data:
+    resp = sb.table("payment_orders").select("*").eq("order_no", order_no).eq("user_id", user_id).maybe_single().execute()
+    if not resp or not resp.data:
         raise HTTPException(status_code=404, detail="查無此訂單")
 
     return resp.data
@@ -601,8 +601,8 @@ async def reconcile_pending_orders(
                     # 付款成功但 callback 漏掉 → 補處理
                     existing = sb.table("payment_orders").select("status").eq(
                         "order_no", order_no
-                    ).single().execute()
-                    if existing.data and existing.data.get("status") == "pending":
+                    ).maybe_single().execute()
+                    if existing and existing.data and existing.data.get("status") == "pending":
                         sb.table("payment_orders").update({
                             "status": "paid",
                             "ecpay_trade_no": trade_no,
