@@ -19,7 +19,7 @@ from time import time as _time
 import httpx
 
 from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel
 
 from routers.supabase_client import get_supabase
@@ -68,10 +68,19 @@ PLANS = {
 # ── CheckMacValue 生成 ──────────────────────────────────────────────────────
 
 def _generate_check_mac_value(params: dict) -> str:
-    """依照綠界規格產生 CheckMacValue (SHA256)"""
+    """依照綠界規格產生 CheckMacValue (SHA256)
+
+    ECPay 使用 .NET HttpUtility.UrlEncode，不編碼 - _ . ! * ( ) 這幾個字元。
+    Python 的 quote_plus(safe="") 會把它們編碼，必須事後還原。
+    """
     sorted_params = sorted(params.items(), key=lambda x: x[0].lower())
     raw = f"HashKey={ECPAY_HASH_KEY}&" + "&".join(f"{k}={v}" for k, v in sorted_params) + f"&HashIV={ECPAY_HASH_IV}"
     encoded = urllib.parse.quote_plus(raw, safe="").lower()
+    # 還原 .NET UrlEncode 不會編碼的字元（ECPay 規格要求）
+    encoded = (encoded
+               .replace("%2d", "-").replace("%5f", "_").replace("%2e", ".")
+               .replace("%21", "!").replace("%2a", "*")
+               .replace("%28", "(").replace("%29", ")"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest().upper()
 
 
@@ -164,7 +173,7 @@ def _build_ecpay_params(user_id: str, plan_key: str) -> tuple[str, dict]:
         "TradeDesc": f"TaifexAI {plan['name']}",
         "ItemName": f"TaifexAI {plan['name']}",
         "ReturnURL": f"{API_PUBLIC_URL}/payment/notify",
-        "OrderResultURL": f"{FRONTEND_URL}/05_pricing?payment_result=1",
+        "OrderResultURL": f"{API_PUBLIC_URL}/payment/order-result",
         "ChoosePayment": "Credit",
         "EncryptType": 1,
         "NeedExtraPaidInfo": "Y",
@@ -245,6 +254,24 @@ def payment_checkout(plan: str = "", token: str = ""):
         return HTMLResponse(f"<h2>{e.detail}</h2>", status_code=e.status_code)
 
     return HTMLResponse(_ecpay_html(params))
+
+
+# ── 付款完成後使用者端 redirect（ECPay OrderResultURL）────────────────────────
+
+@router.post("/order-result")
+async def order_result(request: Request):
+    """
+    ECPay 在付款完成後，以 POST 方式將使用者瀏覽器 redirect 到此頁。
+    Streamlit 不接受 POST，所以由 FastAPI 接收後 302 redirect 到前端。
+    真正的訂閱啟用由 /notify（server-to-server）處理，此端點只負責跳轉。
+    """
+    form = await request.form()
+    rtn_code = dict(form).get("RtnCode", "")
+    if rtn_code == "1":
+        return RedirectResponse(f"{FRONTEND_URL}/05_pricing?payment_result=1", status_code=302)
+    else:
+        rtn_msg = dict(form).get("RtnMsg", "付款失敗")
+        return RedirectResponse(f"{FRONTEND_URL}/05_pricing?payment_failed=1&msg={urllib.parse.quote(rtn_msg)}", status_code=302)
 
 
 # ── 綠界付款結果通知（Server 端回呼）────────────────────────────────────────

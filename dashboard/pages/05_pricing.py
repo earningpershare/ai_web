@@ -16,6 +16,11 @@ API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
 
 # ── 付款結果處理 ─────────────────────────────────────────────────────────────
 
+if st.query_params.get("payment_failed"):
+    msg = st.query_params.get("msg", "付款失敗，請稍後再試")
+    st.query_params.clear()
+    st.error(f"付款未完成：{msg}")
+
 if st.query_params.get("payment_result"):
     st.query_params.clear()
     token = st.session_state.get("token", "")
