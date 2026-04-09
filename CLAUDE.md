@@ -59,3 +59,4 @@ free (0) → pro (1) → ultimate (2)
 | `/review` | Code Reviewer | 審查 code、安全檢查 |
 | `/pm` | 專案經理 | 進度追蹤、週報、changelog |
 | `/devops` | DevOps | 部署、監控、健康檢查 |
+| `/qa` | 數據品質分析師 | 比對官網 vs DB、找聚合邏輯問題 |
