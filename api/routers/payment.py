@@ -536,6 +536,7 @@ async def cancel_subscription(authorization: str = Header(default="")):
 
 
 RECONCILE_SECRET = os.getenv("RECONCILE_SECRET", "")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "ohmygot65@yahoo.com.tw")
 
 
 # ── 主動對帳（補抓漏掉的 callback）─────────────────────────────────────────
@@ -640,4 +641,186 @@ async def reconcile_pending_orders(
         "recovered": len(recovered),
         "recovered_orders": recovered,
         "message": f"對帳完成：共檢查 {checked} 筆，補處理 {len(recovered)} 筆",
+    }
+
+
+# ── Admin 工具 ───────────────────────────────────────────────────────────────
+
+def _require_admin(authorization: str):
+    """驗證必須是 ADMIN_EMAIL 才能操作"""
+    user = _current_user(authorization)
+    if user.email != ADMIN_EMAIL:
+        raise HTTPException(status_code=403, detail="僅限管理員")
+    return user
+
+
+@router.get("/admin/overview")
+def admin_overview(authorization: str = Header(default="")):
+    """
+    管理員：查詢所有付款記錄與對應的訂閱狀態。
+    回傳每筆 payment_order 並附上該 user 的當前 plan / subscription。
+    """
+    _require_admin(authorization)
+    sb = get_supabase()
+
+    orders = sb.table("payment_orders").select(
+        "order_no, user_id, plan, amount, status, is_periodic, ecpay_trade_no, paid_at, created_at"
+    ).order("created_at", desc=True).execute().data or []
+
+    if not orders:
+        return {"rows": []}
+
+    user_ids = list({o["user_id"] for o in orders})
+
+    profiles = {
+        r["id"]: r for r in (
+            sb.table("user_profiles").select("id, display_name, plan")
+            .in_("id", user_ids).execute().data or []
+        )
+    }
+    subs = {}
+    for r in (sb.table("user_subscriptions")
+              .select("user_id, plan, status, expires_at, started_at")
+              .in_("user_id", user_ids)
+              .eq("status", "active")
+              .execute().data or []):
+        subs[r["user_id"]] = r
+
+    rows = []
+    for o in orders:
+        uid = o["user_id"]
+        prof = profiles.get(uid, {})
+        sub = subs.get(uid)
+        rows.append({
+            "order_no":       o["order_no"],
+            "user_id":        uid,
+            "display_name":   prof.get("display_name", ""),
+            "order_plan":     o["plan"],
+            "order_amount":   o["amount"],
+            "order_status":   o["status"],
+            "is_periodic":    o["is_periodic"],
+            "ecpay_trade_no": o.get("ecpay_trade_no", ""),
+            "paid_at":        o.get("paid_at", ""),
+            "order_created":  o["created_at"],
+            "current_plan":   prof.get("plan", "?"),
+            "sub_status":     sub["status"] if sub else "none",
+            "sub_expires":    sub["expires_at"] if sub else "",
+            "sub_started":    sub["started_at"] if sub else "",
+        })
+
+    return {"rows": rows}
+
+
+@router.post("/admin/sync-subscriptions")
+def admin_sync_subscriptions(authorization: str = Header(default="")):
+    """
+    管理員：根據 payment_orders (status=paid) 同步訂閱狀態。
+    - 若 user 無 active 訂閱但有 paid 訂單 → 補建訂閱
+    - 若 active 訂閱存在但 plan 與付款不符 → 修正
+    - 更新 user_profiles.plan 確保一致
+    回傳修正清單。
+    """
+    _require_admin(authorization)
+    sb = get_supabase()
+
+    paid_orders = sb.table("payment_orders").select(
+        "order_no, user_id, plan, amount, is_periodic, ecpay_trade_no, paid_at"
+    ).eq("status", "paid").order("paid_at", desc=True).execute().data or []
+
+    # 每位 user 只取最新一筆 paid 訂單
+    latest: dict[str, dict] = {}
+    for o in paid_orders:
+        uid = o["user_id"]
+        if uid not in latest:
+            latest[uid] = o
+
+    subs = {
+        r["user_id"]: r for r in (
+            sb.table("user_subscriptions").select("user_id, plan, status, expires_at")
+            .in_("user_id", list(latest.keys()))
+            .eq("status", "active").execute().data or []
+        )
+    }
+    profiles = {
+        r["id"]: r for r in (
+            sb.table("user_profiles").select("id, plan, display_name")
+            .in_("id", list(latest.keys())).execute().data or []
+        )
+    }
+
+    fixed = []
+    now_utc = datetime.now(timezone.utc)
+
+    for uid, order in latest.items():
+        plan_key = order["plan"]
+        plan_cfg = PLANS.get(plan_key, {})
+        sub = subs.get(uid)
+        prof = profiles.get(uid, {})
+
+        needs_fix = False
+        reason = []
+
+        # 判斷是否需要修正
+        if not sub:
+            needs_fix = True
+            reason.append("無 active 訂閱")
+        elif sub["plan"] != plan_key:
+            needs_fix = True
+            reason.append(f"訂閱 plan={sub['plan']} 與付款 plan={plan_key} 不符")
+
+        if prof.get("plan") != plan_key:
+            # profile plan 也要修
+            sb.table("user_profiles").update({"plan": plan_key}).eq("id", uid).execute()
+            reason.append(f"profile.plan={prof.get('plan')} → {plan_key}")
+            needs_fix = True
+
+        if needs_fix:
+            # 計算正確的到期日
+            if plan_cfg.get("is_periodic"):
+                # 從 paid_at 算起 +35 天；若沒有 paid_at 從現在算
+                base = datetime.fromisoformat(order["paid_at"]) if order.get("paid_at") else now_utc
+                expires = (base.replace(tzinfo=timezone.utc) + timedelta(days=35)).isoformat()
+            else:
+                expires = "2099-12-31T23:59:59+00:00"
+
+            # 將舊 active 訂閱標為 superseded
+            sb.table("user_subscriptions").update({"status": "superseded"}).eq(
+                "user_id", uid).eq("status", "active").execute()
+
+            # 補建 / 修正訂閱
+            sb.table("user_subscriptions").insert({
+                "user_id":    uid,
+                "plan":       plan_key,
+                "status":     "active",
+                "expires_at": expires,
+                "amount_twd": order["amount"],
+                "metadata":   {
+                    "order_no":   order["order_no"],
+                    "trade_no":   order.get("ecpay_trade_no", ""),
+                    "admin_sync": True,
+                },
+            }).execute()
+
+            sb.table("user_profiles").update({"plan": plan_key}).eq("id", uid).execute()
+
+            sb.table("subscription_events").insert({
+                "user_id":    uid,
+                "event_type": "admin_sync",
+                "to_plan":    plan_key,
+                "metadata":   {"reason": ", ".join(reason), "order_no": order["order_no"]},
+            }).execute()
+
+            fixed.append({
+                "user_id":      uid,
+                "display_name": prof.get("display_name", ""),
+                "plan":         plan_key,
+                "expires":      expires,
+                "reason":       ", ".join(reason),
+            })
+
+    return {
+        "synced": len(latest),
+        "fixed":  len(fixed),
+        "fixed_list": fixed,
+        "message": f"掃描 {len(latest)} 位付款用戶，修正 {len(fixed)} 筆",
     }

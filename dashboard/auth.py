@@ -282,6 +282,8 @@ def _show_locked_wall(reason: str, required: str = "pro"):
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
     _hide_page("verify_email")
+    if st.session_state.get("email", "").lower() != "ohmygot65@yahoo.com.tw":
+        _hide_page("admin")
 
     # ── 從 cookie 還原 session（新分頁時）─────────────────────────
     # 第一次載入：注入 JS 讀 cookie 並用 query_params 回傳 token
