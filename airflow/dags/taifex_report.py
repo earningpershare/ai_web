@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
-from taifex_daily import on_failure_callback, dag_failure_callback
+from dag_shared import on_failure_callback, dag_failure_callback
 
 sys.path.insert(0, "/opt/crawler")
 
