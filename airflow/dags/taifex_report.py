@@ -29,7 +29,8 @@ def run_report(ds: str, params: dict = None, **_):
     from datetime import date
 
     # 支援手動觸發時指定不同日期與收件人
-    trade_date_str = (params or {}).get("trade_date", ds)
+    # 注意：params 預設有 trade_date="" 空字串，需用 or ds fallback 而非 .get(key, default)
+    trade_date_str = ((params or {}).get("trade_date") or "").strip() or ds
     recipients_str = (params or {}).get("recipients", "")
 
     trade_date = date.fromisoformat(trade_date_str)
