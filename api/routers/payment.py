@@ -1,10 +1,12 @@
 """
 Payment Router — 綠界科技 (ECPay) 金流串接
 
-POST /payment/create-order     — 建立付款訂單，回傳綠界付款表單 HTML
-POST /payment/notify           — 綠界 Server 端回呼（ReturnURL）
-POST /payment/period-notify    — 定期定額每期回呼（PeriodReturnURL）
-GET  /payment/status/{order_no} — 查詢訂單狀態
+POST /payment/create-order          — 建立付款訂單，回傳綠界付款表單 HTML
+POST /payment/notify                — 綠界 Server 端回呼（ReturnURL）
+POST /payment/period-notify         — 定期定額每期回呼（PeriodReturnURL）
+GET  /payment/status/{order_no}     — 查詢訂單狀態
+POST /payment/cancel-subscription   — 取消定期定額訂閱
+POST /payment/reconcile             — 主動對帳（補抓漏掉的 callback）
 """
 
 import hashlib
@@ -12,9 +14,12 @@ import logging
 import os
 import urllib.parse
 from datetime import datetime, timezone, timedelta
+from time import time as _time
+
+import httpx
 
 from fastapi import APIRouter, HTTPException, Header, Request
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 
 from routers.supabase_client import get_supabase
@@ -35,6 +40,9 @@ API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
 
 # 正式環境
 ECPAY_ACTION_URL = "https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5"
+ECPAY_PERIOD_QUERY_URL = "https://payment.ecpay.com.tw/Cashier/QueryCreditCardPeriodInfo"
+ECPAY_PERIOD_ACTION_URL = "https://payment.ecpay.com.tw/Cashier/CreditCardPeriodAction"
+ECPAY_ORDER_QUERY_URL = "https://payment.ecpay.com.tw/Cashier/QueryTradeInfo/V5"
 # 測試環境（開發時切換）
 # ECPAY_ACTION_URL = "https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5"
 
@@ -188,20 +196,76 @@ def create_order(body: CreateOrderRequest, authorization: str = Header(default="
 
     params["CheckMacValue"] = _generate_check_mac_value(params)
 
-    # 回傳自動提交的 HTML 表單
+    # 將表單參數存入 DB，供 /checkout/{order_no} 頁面使用
+    sb.table("payment_orders").update({
+        "raw_response": params,  # 暫存表單參數（付款前，含 CheckMacValue）
+    }).eq("order_no", order_no).execute()
+
+    # 回傳 checkout URL（前端用 link_button 跳轉，避免 Streamlit iframe sandbox 問題）
+    checkout_url = f"{API_PUBLIC_URL}/payment/checkout/{order_no}"
+    return {"order_no": order_no, "checkout_url": checkout_url}
+
+
+# ── 結帳中介頁（自動 POST 到綠界）───────────────────────────────────────────
+
+@router.get("/checkout/{order_no}", response_class=HTMLResponse)
+def payment_checkout(order_no: str):
+    """
+    使用者點擊付款後跳轉到此頁。
+    從 DB 讀取之前存的 ECPay 表單參數，自動 POST 到綠界。
+    這樣可以繞過 Streamlit iframe sandbox 無法跨視窗導航的限制。
+    """
+    sb = get_supabase()
+    resp = sb.table("payment_orders").select("raw_response, status").eq("order_no", order_no).single().execute()
+    if not resp.data:
+        return HTMLResponse("<h2>找不到此訂單</h2>", status_code=404)
+
+    if resp.data.get("status") != "pending":
+        return HTMLResponse(
+            f'<h2>此訂單已處理完畢</h2><p>狀態：{resp.data["status"]}</p>',
+            status_code=400,
+        )
+
+    params = resp.data.get("raw_response") or {}
+    if not params:
+        return HTMLResponse("<h2>訂單資料遺失，請重新下單</h2>", status_code=400)
+
     form_inputs = "\n".join(
-        f'<input type="hidden" name="{k}" value="{v}" />'
+        f'    <input type="hidden" name="{k}" value="{v}" />'
         for k, v in params.items()
     )
-    html = f"""
-    <html><body>
-    <form id="ecpay" method="POST" action="{ECPAY_ACTION_URL}">
-        {form_inputs}
-    </form>
-    <script>document.getElementById('ecpay').submit();</script>
-    </body></html>
-    """
-    return {"order_no": order_no, "html": html}
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>正在跳轉至付款頁面...</title>
+  <style>
+    body {{ font-family: sans-serif; display:flex; align-items:center;
+            justify-content:center; height:100vh; margin:0; background:#0e1117; color:#ccc; }}
+    .msg {{ text-align:center; }}
+    .spinner {{ width:40px; height:40px; border:4px solid #333;
+                border-top-color:#4f8ef7; border-radius:50%;
+                animation:spin 0.8s linear infinite; margin:0 auto 16px; }}
+    @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
+  </style>
+</head>
+<body>
+  <div class="msg">
+    <div class="spinner"></div>
+    <p>正在跳轉至綠界付款頁面，請稍候...</p>
+  </div>
+  <form id="ecpay" method="POST" action="{ECPAY_ACTION_URL}">
+{form_inputs}
+  </form>
+  <script>
+    window.onload = function() {{
+      document.getElementById('ecpay').submit();
+    }};
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(html)
 
 
 # ── 綠界付款結果通知（Server 端回呼）────────────────────────────────────────
@@ -367,3 +431,207 @@ def payment_status(order_no: str, authorization: str = Header(default="")):
         raise HTTPException(status_code=404, detail="查無此訂單")
 
     return resp.data
+
+
+# ── 取消定期定額訂閱 ─────────────────────────────────────────────────────────
+
+@router.post("/cancel-subscription")
+async def cancel_subscription(authorization: str = Header(default="")):
+    """
+    取消使用者的定期定額訂閱。
+    1. 找到最新的 pending/paid 定期訂單，呼叫綠界 CreditCardPeriodAction (Cancel)
+    2. 更新 user_subscriptions 狀態為 cancelled
+    3. 不立即降級（讓用戶用到期為止）
+    """
+    user = _current_user(authorization)
+    user_id = str(user.id)
+
+    sb = get_supabase()
+
+    # 查找有效的定期訂閱對應的付款訂單
+    order_resp = (
+        sb.table("payment_orders")
+        .select("order_no, ecpay_trade_no, plan, status")
+        .eq("user_id", user_id)
+        .eq("is_periodic", True)
+        .in_("status", ["paid"])
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not order_resp.data:
+        raise HTTPException(status_code=404, detail="找不到可取消的定期訂閱")
+
+    order = order_resp.data[0]
+    order_no = order["order_no"]
+
+    # 確認用戶目前有 active periodic 訂閱
+    sub_resp = (
+        sb.table("user_subscriptions")
+        .select("id, status")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .execute()
+    )
+
+    if not sub_resp.data:
+        raise HTTPException(status_code=400, detail="您目前沒有有效訂閱")
+
+    # 呼叫綠界 CreditCardPeriodAction Cancel
+    ts = str(int(_time()))
+    params = {
+        "MerchantID": ECPAY_MERCHANT_ID,
+        "MerchantTradeNo": order_no,
+        "Action": "Cancel",
+        "TimeStamp": ts,
+    }
+    params["CheckMacValue"] = _generate_check_mac_value(params)
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                ECPAY_PERIOD_ACTION_URL,
+                data=params,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        result = r.text.strip()
+        log.info("ECPay CancelPeriod: order=%s result=%s", order_no, result)
+
+        # 綠界回傳 "1|OK" 或含錯誤訊息
+        if not result.startswith("1|OK"):
+            # 若綠界說已取消（可能已手動取消），也允許繼續
+            if "已終止" not in result and "cancel" not in result.lower():
+                raise HTTPException(status_code=502, detail=f"綠界取消失敗：{result}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("ECPay CancelPeriod request failed: %s", e)
+        raise HTTPException(status_code=502, detail="無法連線綠界，請稍後再試")
+
+    # 更新 DB：訂閱狀態改為 cancelled（保留到期日，讓用戶用到期）
+    sb.table("user_subscriptions").update({"status": "cancelled"}).eq(
+        "user_id", user_id
+    ).eq("status", "active").execute()
+
+    sb.table("payment_orders").update({"status": "cancelled"}).eq(
+        "order_no", order_no
+    ).execute()
+
+    sb.table("subscription_events").insert({
+        "user_id": user_id,
+        "event_type": "subscription_cancelled",
+        "to_plan": order["plan"],
+        "metadata": {"order_no": order_no, "cancelled_by": "user"},
+    }).execute()
+
+    log.info("Subscription cancelled: user=%s order=%s", user_id, order_no)
+    return {"ok": True, "message": "訂閱已取消，您可繼續使用至當期到期日"}
+
+
+RECONCILE_SECRET = os.getenv("RECONCILE_SECRET", "")
+
+
+# ── 主動對帳（補抓漏掉的 callback）─────────────────────────────────────────
+
+@router.post("/reconcile")
+async def reconcile_pending_orders(
+    authorization: str = Header(default=""),
+    x_reconcile_secret: str = Header(default="", alias="X-Reconcile-Secret"),
+):
+    """
+    主動向綠界查詢所有超過 10 分鐘仍 pending 的訂單，
+    補處理漏掉的付款成功通知。
+    授權方式二擇一：
+      - Bearer token（一般用戶/管理員）
+      - X-Reconcile-Secret header（Airflow 等內部服務）
+    """
+    if x_reconcile_secret and RECONCILE_SECRET and x_reconcile_secret == RECONCILE_SECRET:
+        pass  # 內部服務授權通過
+    else:
+        _current_user(authorization)  # 否則驗證 JWT
+
+    sb = get_supabase()
+
+    # 只撈超過 10 分鐘的 pending 訂單
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    pending_resp = (
+        sb.table("payment_orders")
+        .select("order_no, user_id, plan, amount, is_periodic, created_at")
+        .eq("status", "pending")
+        .lt("created_at", cutoff)
+        .execute()
+    )
+
+    orders = pending_resp.data or []
+    if not orders:
+        return {"checked": 0, "recovered": 0, "message": "沒有需要對帳的訂單"}
+
+    recovered = []
+    checked = 0
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        for order in orders:
+            order_no = order["order_no"]
+            ts = str(int(_time()))
+            params = {
+                "MerchantID": ECPAY_MERCHANT_ID,
+                "MerchantTradeNo": order_no,
+                "TimeStamp": ts,
+                "PlatformID": "",
+            }
+            params["CheckMacValue"] = _generate_check_mac_value(params)
+
+            try:
+                r = await client.post(
+                    ECPAY_ORDER_QUERY_URL,
+                    data=params,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+                # 回傳 URL-encoded 字串，如 TradeStatus=1&PaymentType=Credit&...
+                result = dict(urllib.parse.parse_qsl(r.text))
+                checked += 1
+                log.info("Reconcile query: order=%s status=%s",
+                         order_no, result.get("TradeStatus"))
+
+                trade_status = result.get("TradeStatus", "")
+                trade_no = result.get("TradeNo", "")
+
+                if trade_status == "1":
+                    # 付款成功但 callback 漏掉 → 補處理
+                    existing = sb.table("payment_orders").select("status").eq(
+                        "order_no", order_no
+                    ).single().execute()
+                    if existing.data and existing.data.get("status") == "pending":
+                        sb.table("payment_orders").update({
+                            "status": "paid",
+                            "ecpay_trade_no": trade_no,
+                            "paid_at": datetime.now(timezone.utc).isoformat(),
+                            "raw_response": result,
+                        }).eq("order_no", order_no).execute()
+
+                        plan = PLANS.get(order["plan"], {})
+                        _activate_subscription(
+                            sb, order["user_id"], order["plan"], order_no,
+                            trade_no, order.get("amount", 0), order.get("is_periodic", False),
+                        )
+                        recovered.append(order_no)
+                        log.info("Reconcile RECOVERED: order=%s user=%s", order_no, order["user_id"])
+
+                elif trade_status in ("0", "10200095"):
+                    # 付款失敗或取消
+                    sb.table("payment_orders").update({
+                        "status": "failed",
+                        "raw_response": result,
+                    }).eq("order_no", order_no).execute()
+                    log.info("Reconcile marked FAILED: order=%s", order_no)
+
+            except Exception as e:
+                log.error("Reconcile query failed for order %s: %s", order_no, e)
+
+    return {
+        "checked": checked,
+        "recovered": len(recovered),
+        "recovered_orders": recovered,
+        "message": f"對帳完成：共檢查 {checked} 筆，補處理 {len(recovered)} 筆",
+    }

@@ -4,7 +4,6 @@
 import os
 
 import streamlit as st
-import streamlit.components.v1 as components
 import requests as _requests
 
 from auth import auth_sidebar, is_logged_in, has_plan, show_login_modal, current_plan, PLAN_LABEL
@@ -46,12 +45,15 @@ cur_plan = current_plan()
 
 # ── 付款函式 ─────────────────────────────────────────────────────────────────
 
-def _start_payment(plan_key: str):
-    """呼叫 API 建立訂單，取得綠界表單後跳轉"""
+def _create_order(plan_key: str) -> str | None:
+    """
+    呼叫 API 建立訂單，回傳 checkout_url。
+    若失敗顯示錯誤並回傳 None。
+    """
     token = st.session_state.get("token", "")
     if not token:
         st.error("請先登入")
-        return
+        return None
     try:
         r = _requests.post(
             f"{API_URL}/payment/create-order",
@@ -60,14 +62,14 @@ def _start_payment(plan_key: str):
             timeout=15,
         )
         if r.ok:
-            data = r.json()
-            # 用 iframe 提交綠界表單
-            components.html(data["html"], height=0)
+            return r.json().get("checkout_url")
         else:
             detail = r.json().get("detail", "建立訂單失敗") if r.headers.get("content-type", "").startswith("application/json") else r.text
             st.error(detail)
+            return None
     except Exception as e:
         st.error(f"付款請求失敗：{e}")
+        return None
 
 
 # ── 三欄定價卡 ────────────────────────────────────────────────────────────────
@@ -152,7 +154,13 @@ with col_pro:
         st.button("已擁有更高方案", key="_higher_pro", disabled=True, use_container_width=True)
     else:
         if st.button("升級進階版 — NT$88/月", key="_sub_pro", use_container_width=True, type="primary"):
-            _start_payment("pro")
+            url = _create_order("pro")
+            if url:
+                st.session_state["_checkout_url_pro"] = url
+                st.rerun()
+        if st.session_state.get("_checkout_url_pro"):
+            st.link_button("前往綠界付款 →", st.session_state["_checkout_url_pro"],
+                           use_container_width=True, type="primary")
 
 # ─ 終極版 ─
 with col_ult:
@@ -192,7 +200,37 @@ with col_ult:
             show_login_modal()
     else:
         if st.button("購買終極版 — NT$1,688", key="_sub_ult", use_container_width=True, type="primary"):
-            _start_payment("ultimate")
+            url = _create_order("ultimate")
+            if url:
+                st.session_state["_checkout_url_ult"] = url
+                st.rerun()
+        if st.session_state.get("_checkout_url_ult"):
+            st.link_button("前往綠界付款 →", st.session_state["_checkout_url_ult"],
+                           use_container_width=True, type="primary")
+
+st.divider()
+
+# ── 取消訂閱 ─────────────────────────────────────────────────────────────────
+
+if is_logged_in() and cur_plan == "pro":
+    with st.expander("⚙️ 管理訂閱"):
+        st.markdown("**取消定期扣款**")
+        st.caption("取消後仍可使用至當期到期日，到期後自動降回基礎版，不會再扣款。")
+        if st.button("取消自動續扣", key="_btn_cancel_sub", type="secondary"):
+            token = st.session_state.get("token", "")
+            try:
+                r = _requests.post(
+                    f"{API_URL}/payment/cancel-subscription",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=15,
+                )
+                if r.ok:
+                    st.success(r.json().get("message", "訂閱已取消"))
+                else:
+                    detail = r.json().get("detail", "取消失敗") if r.headers.get("content-type", "").startswith("application/json") else r.text
+                    st.error(detail)
+            except Exception as e:
+                st.error(f"請求失敗：{e}")
 
 st.divider()
 
