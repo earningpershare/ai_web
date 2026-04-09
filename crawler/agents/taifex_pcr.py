@@ -72,7 +72,7 @@ def parse(df: pd.DataFrame, trade_date: date) -> list[dict]:
         "trade_date": trade_date,
         "call_oi": safe_int(get(["call未平倉", "call oi", "買權未平倉"])),
         "put_oi": safe_int(get(["put未平倉", "put oi", "賣權未平倉"])),
-        "pc_oi_ratio": safe_float(get(["未平倉比率", "p/c oi", "oi比"])),
+        "pc_oi_ratio": safe_float(get(["未平倉量比率", "未平倉比率", "p/c oi", "oi比"])),
         "call_volume": safe_int(get(["call成交量", "call volume", "買權成交"])),
         "put_volume": safe_int(get(["put成交量", "put volume", "賣權成交"])),
         "pc_vol_ratio": safe_float(get(["成交量比率", "p/c vol", "volume比"])),
