@@ -12,12 +12,12 @@ st.set_page_config(page_title="方案說明", page_icon="💎", layout="wide")
 auth_sidebar()
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
+API_PUBLIC_URL = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
 
 # ── 付款結果處理 ─────────────────────────────────────────────────────────────
 
 if st.query_params.get("payment_result"):
     st.query_params.clear()
-    # 重新從 API 拉取最新 plan
     token = st.session_state.get("token", "")
     if token:
         try:
@@ -43,33 +43,10 @@ st.divider()
 cur_plan = current_plan()
 
 
-# ── 付款函式 ─────────────────────────────────────────────────────────────────
-
-def _create_order(plan_key: str) -> str | None:
-    """
-    呼叫 API 建立訂單，回傳 checkout_url。
-    若失敗顯示錯誤並回傳 None。
-    """
+def _checkout_url(plan_key: str) -> str:
+    """回傳一鍵付款 URL，點擊即建立訂單並跳轉至綠界"""
     token = st.session_state.get("token", "")
-    if not token:
-        st.error("請先登入")
-        return None
-    try:
-        r = _requests.post(
-            f"{API_URL}/payment/create-order",
-            json={"plan": plan_key},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=15,
-        )
-        if r.ok:
-            return r.json().get("checkout_url")
-        else:
-            detail = r.json().get("detail", "建立訂單失敗") if r.headers.get("content-type", "").startswith("application/json") else r.text
-            st.error(detail)
-            return None
-    except Exception as e:
-        st.error(f"付款請求失敗：{e}")
-        return None
+    return f"{API_PUBLIC_URL}/payment/checkout?plan={plan_key}&token={token}"
 
 
 # ── 三欄定價卡 ────────────────────────────────────────────────────────────────
@@ -153,14 +130,8 @@ with col_pro:
     elif cur_plan == "ultimate":
         st.button("已擁有更高方案", key="_higher_pro", disabled=True, use_container_width=True)
     else:
-        if st.button("升級進階版 — NT$88/月", key="_sub_pro", use_container_width=True, type="primary"):
-            url = _create_order("pro")
-            if url:
-                st.session_state["_checkout_url_pro"] = url
-                st.rerun()
-        if st.session_state.get("_checkout_url_pro"):
-            st.link_button("前往綠界付款 →", st.session_state["_checkout_url_pro"],
-                           use_container_width=True, type="primary")
+        st.link_button("升級進階版 — NT$88/月", _checkout_url("pro"),
+                       use_container_width=True, type="primary")
 
 # ─ 終極版 ─
 with col_ult:
@@ -199,14 +170,8 @@ with col_ult:
         if st.button("登入後購買", key="_login_ult", use_container_width=True):
             show_login_modal()
     else:
-        if st.button("購買終極版 — NT$1,688", key="_sub_ult", use_container_width=True, type="primary"):
-            url = _create_order("ultimate")
-            if url:
-                st.session_state["_checkout_url_ult"] = url
-                st.rerun()
-        if st.session_state.get("_checkout_url_ult"):
-            st.link_button("前往綠界付款 →", st.session_state["_checkout_url_ult"],
-                           use_container_width=True, type="primary")
+        st.link_button("購買終極版 — NT$1,688", _checkout_url("ultimate"),
+                       use_container_width=True, type="primary")
 
 st.divider()
 

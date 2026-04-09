@@ -124,39 +124,28 @@ def _activate_subscription(sb, user_id: str, plan_key: str, order_no: str,
     }).execute()
 
 
-# ── Schemas ──────────────────────────────────────────────────────────────────
+# ── 建立訂單（內部共用）────────────────────────────────────────────────────
 
-class CreateOrderRequest(BaseModel):
-    plan: str  # "pro" or "ultimate"
-
-
-# ── 建立訂單 ─────────────────────────────────────────────────────────────────
-
-@router.post("/create-order")
-def create_order(body: CreateOrderRequest, authorization: str = Header(default="")):
-    user = _current_user(authorization)
-    user_id = str(user.id)
-
-    plan_key = body.plan
+def _build_ecpay_params(user_id: str, plan_key: str) -> tuple[str, dict]:
+    """
+    建立 payment_orders 記錄並回傳 (order_no, ecpay_params)。
+    拋出 HTTPException 表示業務邏輯錯誤。
+    """
     if plan_key not in PLANS:
         raise HTTPException(status_code=400, detail="無效的方案")
 
     plan = PLANS[plan_key]
-
-    # 檢查是否已經是該方案或更高
     sb = get_supabase()
+
     profile = sb.table("user_profiles").select("plan").eq("id", user_id).single().execute()
     current = (profile.data or {}).get("plan", "free")
     if PLAN_RANK.get(current, 0) >= PLAN_RANK.get(plan_key, 0):
         raise HTTPException(status_code=400, detail="您已經是此方案或更高方案的會員")
 
-    # 生成訂單編號：TF + 時間戳 + user_id 前 4 碼（確保唯一且 <= 20 字元）
     ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d%H%M%S")
     order_no = f"TF{ts}{user_id[:4]}"[:20]
-
     now_str = datetime.now(timezone(timedelta(hours=8))).strftime("%Y/%m/%d %H:%M:%S")
 
-    # 寫入 payment_orders
     sb.table("payment_orders").insert({
         "order_no": order_no,
         "user_id": user_id,
@@ -166,7 +155,6 @@ def create_order(body: CreateOrderRequest, authorization: str = Header(default="
         "is_periodic": plan.get("is_periodic", False),
     }).execute()
 
-    # 組綠界參數 — ReturnURL 必須是公網可達的 URL
     params = {
         "MerchantID": ECPAY_MERCHANT_ID,
         "MerchantTradeNo": order_no,
@@ -184,7 +172,6 @@ def create_order(body: CreateOrderRequest, authorization: str = Header(default="
         "CustomField2": plan_key,
     }
 
-    # 定期定額參數
     if plan.get("is_periodic"):
         params.update({
             "PeriodAmount": plan["amount"],
@@ -195,47 +182,16 @@ def create_order(body: CreateOrderRequest, authorization: str = Header(default="
         })
 
     params["CheckMacValue"] = _generate_check_mac_value(params)
-
-    # 將表單參數存入 DB，供 /checkout/{order_no} 頁面使用
-    sb.table("payment_orders").update({
-        "raw_response": params,  # 暫存表單參數（付款前，含 CheckMacValue）
-    }).eq("order_no", order_no).execute()
-
-    # 回傳 checkout URL（前端用 link_button 跳轉，避免 Streamlit iframe sandbox 問題）
-    checkout_url = f"{API_PUBLIC_URL}/payment/checkout/{order_no}"
-    return {"order_no": order_no, "checkout_url": checkout_url}
+    return order_no, params
 
 
-# ── 結帳中介頁（自動 POST 到綠界）───────────────────────────────────────────
-
-@router.get("/checkout/{order_no}", response_class=HTMLResponse)
-def payment_checkout(order_no: str):
-    """
-    使用者點擊付款後跳轉到此頁。
-    從 DB 讀取之前存的 ECPay 表單參數，自動 POST 到綠界。
-    這樣可以繞過 Streamlit iframe sandbox 無法跨視窗導航的限制。
-    """
-    sb = get_supabase()
-    resp = sb.table("payment_orders").select("raw_response, status").eq("order_no", order_no).maybe_single().execute()
-    if not resp or not resp.data:
-        return HTMLResponse("<h2>找不到此訂單</h2>", status_code=404)
-
-    if resp.data.get("status") != "pending":
-        return HTMLResponse(
-            f'<h2>此訂單已處理完畢</h2><p>狀態：{resp.data["status"]}</p>',
-            status_code=400,
-        )
-
-    params = resp.data.get("raw_response") or {}
-    if not params:
-        return HTMLResponse("<h2>訂單資料遺失，請重新下單</h2>", status_code=400)
-
+def _ecpay_html(params: dict) -> str:
+    """產生自動提交到綠界的 HTML 頁面"""
     form_inputs = "\n".join(
         f'    <input type="hidden" name="{k}" value="{v}" />'
         for k, v in params.items()
     )
-
-    html = f"""<!DOCTYPE html>
+    return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -265,7 +221,30 @@ def payment_checkout(order_no: str):
   </script>
 </body>
 </html>"""
-    return HTMLResponse(html)
+
+
+# ── 結帳中介頁（使用者點訂閱按鈕後直接跳轉）────────────────────────────────
+
+@router.get("/checkout", response_class=HTMLResponse)
+def payment_checkout(plan: str = "", token: str = ""):
+    """
+    前端用 st.link_button 跳轉到此頁（帶 plan + token query params）。
+    在此建立訂單並立即渲染自動提交至綠界的表單，實現一鍵付款。
+    """
+    if not token:
+        return HTMLResponse("<h2>請先登入</h2>", status_code=401)
+
+    try:
+        user = _current_user(f"Bearer {token}")
+    except HTTPException as e:
+        return HTMLResponse(f"<h2>登入已過期，請重新登入</h2><p>{e.detail}</p>", status_code=401)
+
+    try:
+        _, params = _build_ecpay_params(str(user.id), plan)
+    except HTTPException as e:
+        return HTMLResponse(f"<h2>{e.detail}</h2>", status_code=e.status_code)
+
+    return HTMLResponse(_ecpay_html(params))
 
 
 # ── 綠界付款結果通知（Server 端回呼）────────────────────────────────────────
