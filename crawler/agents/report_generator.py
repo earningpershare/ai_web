@@ -482,23 +482,76 @@ def send_report_email(report_html: str, trade_date: str, recipients: list[str]):
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
 
+def _get_paid_member_emails() -> list[str]:
+    """
+    從 Supabase 查詢所有有效進階會員（pro / ultimate）的 email。
+    失敗時 log warning 並回傳空清單（不中斷報告流程）。
+    """
+    try:
+        from supabase import create_client
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not url or not key:
+            logger.warning("SUPABASE 環境變數未設定，無法查詢進階會員")
+            return []
+
+        sb = create_client(url, key)
+        sb.postgrest.auth(key)
+
+        # 查詢所有 active 的 pro/ultimate 訂閱
+        resp = (
+            sb.table("user_subscriptions")
+            .select("user_id")
+            .in_("plan", ["pro", "ultimate"])
+            .eq("status", "active")
+            .execute()
+        )
+        user_ids = [row["user_id"] for row in (resp.data or [])]
+
+        # 透過 admin API 取得每個 user 的 email
+        emails = []
+        for uid in user_ids:
+            try:
+                user_resp = sb.auth.admin.get_user_by_id(uid)
+                if user_resp.user and user_resp.user.email:
+                    emails.append(user_resp.user.email)
+            except Exception as e:
+                logger.warning("無法取得 user %s 的 email: %s", uid, e)
+
+        logger.info("查詢到 %d 位進階會員收件人", len(emails))
+        return emails
+
+    except Exception as e:
+        logger.warning("查詢進階會員 email 失敗（%s），繼續使用預設收件人", e)
+        return []
+
+
 def run(trade_date: date, recipients: list[str] = None):
     """
     生成並寄送當日市場籌碼觀察報告。
 
     Args:
         trade_date: 交易日期
-        recipients: 收件人 email 清單；若未指定則讀取環境變數 REPORT_RECIPIENTS
+        recipients: 手動指定收件人（覆蓋自動查詢）；
+                    若未指定，自動查詢 Supabase 所有 active pro/ultimate 會員，
+                    並加上環境變數 REPORT_RECIPIENTS 中的額外地址。
     """
     if recipients is None:
+        # 自動查詢進階會員
+        member_emails = _get_paid_member_emails()
+
+        # 加上環境變數中額外指定的地址（如管理員通知）
         env_list = os.getenv("REPORT_RECIPIENTS", "")
-        recipients = [e.strip() for e in env_list.split(",") if e.strip()]
+        extra = [e.strip() for e in env_list.split(",") if e.strip()]
+
+        # 合併去重
+        recipients = list(dict.fromkeys(member_emails + extra))
 
     if not recipients:
-        logger.warning("未設定 REPORT_RECIPIENTS，跳過寄送")
+        logger.warning("無進階會員且未設定 REPORT_RECIPIENTS，跳過寄送")
         return
 
-    logger.info("開始生成 %s 報告，收件人：%s", trade_date, recipients)
+    logger.info("開始生成 %s 報告，收件人（%d 位）：%s", trade_date, len(recipients), recipients)
 
     data = fetch_market_data(trade_date)
     prompt = build_prompt(data)
