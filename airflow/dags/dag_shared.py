@@ -51,7 +51,7 @@ def get_trade_date(**context) -> date:
 
 def on_failure_callback(context):
     dag_id = context["dag"].dag_id
-    trade_date = context["ds"]
+    trade_date = get_trade_date(**context)
     task_id = context["task_instance"].task_id
     exception = context.get("exception", "未知錯誤")
     send_email(
@@ -73,7 +73,7 @@ def on_failure_callback(context):
 
 def dag_success_callback(context):
     dag_id = context["dag"].dag_id
-    trade_date = context["ds"]
+    trade_date = get_trade_date(**context)
     send_email(
         to=NOTIFY_EMAIL,
         subject=f"[✅ 全部完成] {dag_id} — {trade_date}",
@@ -87,7 +87,7 @@ def dag_success_callback(context):
 
 def dag_failure_callback(context):
     dag_id = context["dag"].dag_id
-    trade_date = context["ds"]
+    trade_date = get_trade_date(**context)
     send_email(
         to=NOTIFY_EMAIL,
         subject=f"[❌ DAG 失敗] {dag_id} — {trade_date}",

@@ -22,18 +22,21 @@ log = logging.getLogger(__name__)
 NOTIFY_EMAIL = "somehandisfrank@gmail.com"
 
 
-def run_report(ds: str, params: dict = None, **_):
+def run_report(ds: str, params: dict = None, **context):
     import os
     import requests
     from agents.report_generator import run
-    from datetime import date
+    from dag_shared import get_trade_date
 
-    # 支援手動觸發時指定不同日期與收件人
-    # 注意：params 預設有 trade_date="" 空字串，需用 or ds fallback 而非 .get(key, default)
-    trade_date_str = ((params or {}).get("trade_date") or "").strip() or ds
+    # 手動指定 trade_date 優先；否則與 taifex_daily 一致使用 data_interval_end
+    td_override = ((params or {}).get("trade_date") or "").strip()
+    if td_override:
+        from datetime import date
+        trade_date = date.fromisoformat(td_override)
+    else:
+        trade_date = get_trade_date(ds=ds, params=params, **context)
+
     recipients_str = (params or {}).get("recipients", "")
-
-    trade_date = date.fromisoformat(trade_date_str)
     recipients = [e.strip() for e in recipients_str.split(",") if e.strip()] or None
 
     # 確認是交易日：查 API 當天是否有期貨資料
