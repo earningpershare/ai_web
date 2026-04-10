@@ -39,9 +39,9 @@ x-airflow-common:
     SUPABASE_URL: ${SUPABASE_URL}
     SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
   volumes:
-    - ./airflow/dags:/opt/airflow/dags
-    - ./airflow/logs:/opt/airflow/logs
-    - ./crawler:/opt/crawler
+    - ./airflow/dags:/opt/airflow/dags:z
+    - ./airflow/logs:/opt/airflow/logs:z
+    - ./crawler:/opt/crawler:z
   depends_on:
     postgres:
       condition: service_healthy
