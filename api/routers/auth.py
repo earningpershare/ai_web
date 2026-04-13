@@ -354,8 +354,104 @@ def vless_clients(secret: str = ""):
     return {"clients": clients}
 
 
+class RedeemPromoBody(BaseModel):
+    promo_code: str
+
+
 class ResendByEmailRequest(BaseModel):
     email: EmailStr
+
+
+@router.post("/redeem-promo")
+def redeem_promo(body: RedeemPromoBody, authorization: str = Header(default="")):
+    """已登入用戶直接兌換優惠碼（僅限 free 方案）"""
+    user = _current_user(authorization)
+    user_id = str(user.id)
+
+    promo_code = body.promo_code.strip().upper()
+    if not promo_code:
+        raise HTTPException(status_code=422, detail="請輸入優惠碼")
+
+    sb = get_supabase()
+
+    # 確認目前方案為 free（已付費用戶不可兌換）
+    profile = _get_profile(user_id)
+    current_plan = profile.get("plan", "free")
+    if PLAN_RANK.get(current_plan, 0) > 0:
+        raise HTTPException(status_code=400, detail="已是付費方案，無法再兌換優惠碼")
+
+    # 查詢優惠碼是否有效
+    resp = (
+        sb.table("promo_codes")
+        .select("id, target_plan, discount_type, discount_value, max_uses, used_count, expires_at")
+        .eq("code", promo_code)
+        .eq("is_active", True)
+        .execute()
+    )
+    if not resp.data:
+        raise HTTPException(status_code=400, detail="優惠碼無效或已停用")
+
+    promo = resp.data[0]
+
+    # 確認未超過使用次數
+    if promo["max_uses"] and promo["used_count"] >= promo["max_uses"]:
+        raise HTTPException(status_code=400, detail="優惠碼使用次數已達上限")
+
+    # 確認未過期（promo_codes 表若有 expires_at 欄位）
+    if promo.get("expires_at"):
+        expires_dt = datetime.fromisoformat(promo["expires_at"])
+        if expires_dt < datetime.now(timezone.utc):
+            raise HTTPException(status_code=400, detail="優惠碼已過期")
+
+    # 確認該用戶之前未使用過相同優惠碼
+    used_check = (
+        sb.table("user_subscriptions")
+        .select("id")
+        .eq("user_id", user_id)
+        .eq("promo_code", promo_code)
+        .execute()
+    )
+    if used_check.data:
+        raise HTTPException(status_code=400, detail="您已使用過此優惠碼")
+
+    target_plan = promo["target_plan"]
+    months = promo["discount_value"] if promo["discount_type"] == "free_month" else 1
+    expires = (datetime.now(timezone.utc) + timedelta(days=30 * months)).isoformat()
+
+    # 建立訂閱記錄
+    sb.table("user_subscriptions").insert({
+        "user_id": user_id,
+        "plan": target_plan,
+        "status": "active",
+        "expires_at": expires,
+        "amount_twd": 0,
+        "promo_code": promo_code,
+    }).execute()
+
+    # 更新 user_profiles.plan
+    sb.table("user_profiles").update({"plan": target_plan}).eq("id", user_id).execute()
+
+    # 更新優惠碼使用次數
+    sb.table("promo_codes").update(
+        {"used_count": promo["used_count"] + 1}
+    ).eq("id", promo["id"]).execute()
+
+    # 記錄事件
+    sb.table("subscription_events").insert({
+        "user_id": user_id,
+        "event_type": "promo_redeemed",
+        "to_plan": target_plan,
+        "promo_code": promo_code,
+    }).execute()
+
+    log.info("User %s redeemed promo code %s → plan %s", user_id, promo_code, target_plan)
+
+    plan_label = {"free": "基礎版", "pro": "進階版", "ultimate": "終極版"}.get(target_plan, target_plan)
+    return {
+        "ok": True,
+        "plan": target_plan,
+        "message": f"優惠碼兌換成功！您已升級至{plan_label}，有效期至 {expires[:10]}",
+    }
 
 
 @router.post("/resend-by-email")

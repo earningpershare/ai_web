@@ -213,9 +213,25 @@ if is_logged_in() and cur_plan == "free":
             if not promo_input:
                 st.error("請輸入優惠碼")
             else:
-                # 直接用現有的 register 後端 promo_code 邏輯不適合
-                # 需要獨立的兌換端點，先顯示提示
-                st.info("優惠碼兌換功能開發中，請聯繫管理員手動升級")
+                token = st.session_state.get("token", "")
+                try:
+                    resp = _requests.post(
+                        f"{API_URL}/auth/redeem-promo",
+                        json={"promo_code": promo_input.strip().upper()},
+                        headers={"Authorization": f"Bearer {token}"},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        # 更新 session 中的方案
+                        st.session_state["plan"] = data.get("plan", "pro")
+                        st.success(data.get("message", "優惠碼兌換成功！"))
+                        st.rerun()
+                    else:
+                        detail = resp.json().get("detail", "兌換失敗，請確認優惠碼是否正確") if resp.headers.get("content-type", "").startswith("application/json") else resp.text
+                        st.error(detail)
+                except Exception as e:
+                    st.error(f"請求失敗：{e}")
 
 st.divider()
 
