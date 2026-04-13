@@ -199,6 +199,199 @@ if table_rows:
 
 st.divider()
 
+# ── 今日籌碼重點摘要 ──────────────────────────────────────────────────────────
+st.subheader("📊 今日籌碼重點")
+
+# 從已載入的 latest / prev / retail_data 取出關鍵數字（不重複呼叫 API）
+
+# 1. 外資期貨淨口數與日增減
+foreign_row = latest.get("外資及陸資", {})
+foreign_prev_row = prev.get("外資及陸資", {})
+foreign_net = foreign_row.get("net_oi", None)
+foreign_prev_net = foreign_prev_row.get("net_oi", None)
+foreign_delta = (foreign_net - foreign_prev_net) if (foreign_net is not None and foreign_prev_net is not None) else None
+
+# 2. 三大法人合計淨口數
+_institutions = ["外資及陸資", "投信", "自營商"]
+combined_net = None
+_all_present = all(latest.get(i, {}).get("net_oi") is not None for i in _institutions)
+if _all_present:
+    combined_net = sum(latest.get(i, {}).get("net_oi", 0) or 0 for i in _institutions)
+
+# 3. PCR（Put/Call OI Ratio）— 從 retail_data 或另外載入
+@st.cache_data(ttl=600)
+def load_pcr_latest():
+    """只取最近一筆 PCR"""
+    try:
+        r = requests.get(
+            f"{API_URL}/pcr",
+            params={"limit": 1},
+            timeout=10,
+        )
+        r.raise_for_status()
+        rows = r.json()
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+pcr_row = load_pcr_latest()
+pcr_oi_ratio = None
+if pcr_row:
+    pcr_oi_ratio = pcr_row.get("oi_ratio")  # 通常是 put_oi / call_oi * 100
+
+# ── 判斷邏輯（規則式，無 AI）────────────────────────────────────────────────
+
+def _direction_label(net):
+    """根據淨口數產生偏多/偏空標籤與顏色"""
+    if net is None:
+        return "數據待更新", "#888"
+    if net > 0:
+        return "偏多 ▲", "#4ade80"
+    elif net < 0:
+        return "偏空 ▼", "#f87171"
+    else:
+        return "中性 ─", "#facc15"
+
+def _pcr_label(ratio):
+    """PCR OI 比率判斷：> 100% 偏空保護；< 100% 偏多樂觀"""
+    if ratio is None:
+        return "數據待更新", "#888", "—"
+    ratio_pct = float(ratio)
+    if ratio_pct > 120:
+        return "選擇權偏空保護", "#f87171", f"{ratio_pct:.1f}%"
+    elif ratio_pct > 100:
+        return "略偏空保護", "#fb923c", f"{ratio_pct:.1f}%"
+    elif ratio_pct > 80:
+        return "偏多樂觀", "#4ade80", f"{ratio_pct:.1f}%"
+    else:
+        return "強烈偏多", "#22d3ee", f"{ratio_pct:.1f}%"
+
+def _summary_sentence(foreign_n, combined_n, pcr_r):
+    """產生一句話文字摘要"""
+    parts = []
+    if foreign_n is not None:
+        if foreign_n > 0:
+            parts.append("外資持多單")
+        elif foreign_n < 0:
+            parts.append("外資持空單")
+    if combined_n is not None:
+        if combined_n > 0:
+            parts.append("三大法人合計偏多")
+        elif combined_n < 0:
+            parts.append("三大法人合計偏空")
+    if pcr_r is not None:
+        ratio_pct = float(pcr_r)
+        if ratio_pct > 100:
+            parts.append("選擇權市場有下跌避險需求")
+        else:
+            parts.append("選擇權市場情緒偏樂觀")
+    if not parts:
+        return "今日尚無交易數據，請於交易日收盤後查看。"
+    return "；".join(parts) + "。"
+
+foreign_label, foreign_color = _direction_label(foreign_net)
+combined_label, combined_color = _direction_label(combined_net)
+pcr_label, pcr_color, pcr_display = _pcr_label(pcr_oi_ratio)
+summary_text = _summary_sentence(foreign_net, combined_net, pcr_oi_ratio)
+
+# ── 4 個指標卡片 ─────────────────────────────────────────────────────────────
+
+m1, m2, m3, m4 = st.columns(4)
+
+with m1:
+    delta_str = f"{foreign_delta:+,} 口" if foreign_delta is not None else "無前日資料"
+    net_str = f"{foreign_net:+,} 口" if foreign_net is not None else "—"
+    st.markdown(
+        f"""
+        <div style="background:#111;border:1px solid #222;border-radius:10px;padding:18px 14px;">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">外資期貨淨口數</div>
+          <div style="font-size:22px;font-weight:bold;color:{foreign_color}">{net_str}</div>
+          <div style="font-size:12px;color:#aaa;margin-top:4px">較前日 {delta_str}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with m2:
+    combined_str = f"{combined_net:+,} 口" if combined_net is not None else "—"
+    st.markdown(
+        f"""
+        <div style="background:#111;border:1px solid #222;border-radius:10px;padding:18px 14px;">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">三大法人合計</div>
+          <div style="font-size:22px;font-weight:bold;color:{combined_color}">{combined_str}</div>
+          <div style="font-size:12px;color:#aaa;margin-top:4px">{combined_label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with m3:
+    st.markdown(
+        f"""
+        <div style="background:#111;border:1px solid #222;border-radius:10px;padding:18px 14px;">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">Put/Call OI 比率</div>
+          <div style="font-size:22px;font-weight:bold;color:{pcr_color}">{pcr_display}</div>
+          <div style="font-size:12px;color:#aaa;margin-top:4px">{pcr_label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with m4:
+    # 散戶方向（已在頁面載入）
+    if retail_data:
+        r_net = retail_data[0].get("net_oi", None)
+        r_label, r_color = _direction_label(r_net)
+        r_str = f"{r_net:+,} 口" if r_net is not None else "—"
+    else:
+        r_str, r_label, r_color = "—", "數據待更新", "#888"
+    st.markdown(
+        f"""
+        <div style="background:#111;border:1px solid #222;border-radius:10px;padding:18px 14px;">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">散戶期貨淨部位</div>
+          <div style="font-size:22px;font-weight:bold;color:{r_color}">{r_str}</div>
+          <div style="font-size:12px;color:#aaa;margin-top:4px">{r_label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── 一句話摘要 ────────────────────────────────────────────────────────────────
+st.markdown(
+    f"""
+    <div style="background:#0d1117;border-left:4px solid #4f8ef7;border-radius:0 8px 8px 0;
+                padding:14px 20px;color:#e0e0e0;font-size:14px;line-height:1.7">
+      <span style="color:#4f8ef7;font-weight:bold">今日小結</span>　{summary_text}
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── 免費用戶升級 CTA（付費用戶不顯示）────────────────────────────────────────
+from auth import has_plan as _has_plan
+if not _has_plan("pro"):
+    st.markdown(
+        """
+        <div style="background:#0a1628;border:1px dashed #2a4a7f;border-radius:10px;
+                    padding:16px 24px;text-align:center;color:#aaa;font-size:14px">
+          👆 完整趨勢圖表、選擇權資金地圖與歷史數據 →
+          <strong style="color:#4f8ef7">Pro 版解鎖</strong>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
+    _, _cta2, _ = st.columns([1, 1, 1])
+    with _cta2:
+        if st.button("升級 Pro 解鎖完整功能 →", use_container_width=True, type="primary", key="_summary_cta"):
+            st.switch_page("pages/05_pricing.py")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+st.divider()
+
 # ── 升級 CTA ──────────────────────────────────────────────────────────────────
 
 st.markdown(
