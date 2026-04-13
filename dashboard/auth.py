@@ -375,8 +375,6 @@ def show_blur_gate(page_name: str, min_plan: str = "pro"):
 def auth_sidebar():
     """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
     _hide_page("verify_email")
-    if st.session_state.get("email", "").lower() != "ohmygot65@yahoo.com.tw":
-        _hide_page("09_admin")
 
     # ── 從 cookie 還原 session（重整或新分頁時）──────────────────
     # Streamlit 1.37+ 可在 server 端直接讀 HTTP cookie，不需要 JS redirect
@@ -400,6 +398,10 @@ def auth_sidebar():
                     _delete_cookie()
             except Exception:
                 pass
+
+    # admin 頁面：只有管理員帳號才顯示（必須在 session restore 後才判斷）
+    if st.session_state.get("email", "").lower() != "ohmygot65@yahoo.com.tw":
+        _hide_page("09_admin")
 
     with st.sidebar:
         st.divider()
