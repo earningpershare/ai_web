@@ -277,6 +277,95 @@ def _show_locked_wall(reason: str, required: str = "pro"):
                 st.switch_page("pages/05_pricing.py")
 
 
+# ── Blur Gate 模糊預覽遮罩 ────────────────────────────────────────────────────
+
+def show_blur_gate(page_name: str, min_plan: str = "pro"):
+    """
+    顯示付費功能的模糊預覽遮罩，引導免費/未登入用戶升級。
+    呼叫後需 st.stop() 停止渲染後續內容（此函式內部已呼叫 st.stop()）。
+
+    參數：
+        page_name: 頁面名稱，顯示於遮罩說明文字
+        min_plan:  所需最低方案（預設 "pro"）
+    """
+    logged_in = is_logged_in()
+    plan_label = PLAN_LABEL.get(min_plan, min_plan)
+
+    # 模擬圖表卡片的佔位區塊（blur 背景）
+    placeholder_cards = "".join(
+        [
+            '<div style="height:120px;background:rgba(255,255,255,0.08);border-radius:8px;"></div>'
+            for _ in range(6)
+        ]
+    )
+
+    if logged_in:
+        gate_title = f"此功能需要{plan_label}"
+        gate_sub = f"{page_name} — 完整互動圖表與深度分析"
+    else:
+        gate_title = "登入並升級即可查看"
+        gate_sub = f"{page_name} — 完整互動圖表與深度分析"
+
+    st.markdown(
+        f"""
+        <div style="position:relative;margin:1rem 0;">
+          <div style="
+            height:420px;
+            background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);
+            border-radius:12px;
+            filter:blur(4px);
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            overflow:hidden;
+          ">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:24px;width:100%;">
+              {placeholder_cards}
+            </div>
+          </div>
+          <div style="
+            position:absolute;top:0;left:0;right:0;bottom:0;
+            display:flex;flex-direction:column;
+            align-items:center;justify-content:center;
+            background:rgba(0,0,0,0.45);
+            border-radius:12px;
+            backdrop-filter:blur(2px);
+          ">
+            <div style="font-size:3rem;margin-bottom:0.5rem;">🔒</div>
+            <div style="font-size:1.2rem;font-weight:600;color:#fff;margin-bottom:0.3rem;">
+              {gate_title}
+            </div>
+            <div style="font-size:0.9rem;color:rgba(255,255,255,0.7);margin-bottom:1.5rem;">
+              {gate_sub}
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        if logged_in:
+            if st.button(
+                f"🚀 升級至{plan_label} — NT$88/月 解鎖完整功能",
+                key="_blur_gate_upgrade_btn",
+                use_container_width=True,
+                type="primary",
+            ):
+                st.switch_page("pages/05_pricing.py")
+        else:
+            if st.button(
+                "免費註冊 + 升級解鎖完整功能",
+                key="_blur_gate_register_btn",
+                use_container_width=True,
+                type="primary",
+            ):
+                st.switch_page("pages/05_pricing.py")
+
+    st.stop()
+
+
 # ── Sidebar 使用者狀態 ────────────────────────────────────────────────────────
 
 def auth_sidebar():

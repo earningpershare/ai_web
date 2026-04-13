@@ -14,9 +14,11 @@ import streamlit as st
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
 st.set_page_config(page_title="選擇權資金地圖", layout="wide")
-from auth import require_plan, auth_sidebar
+from auth import require_plan, auth_sidebar, has_plan, show_blur_gate
 auth_sidebar()
-require_plan("pro")
+# 免費/未登入用戶顯示模糊預覽遮罩而非硬性擋牆，降低轉換障礙
+if not has_plan("pro"):
+    show_blur_gate("選擇權資金地圖")
 
 st.title("選擇權資金地圖")
 st.caption("⚠️ 本頁所有數據均源自 TAIFEX 公開資訊，僅供資料呈現，不構成投資建議。期貨交易有風險，請自行判斷。")
