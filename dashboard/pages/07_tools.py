@@ -8,6 +8,47 @@ import requests as _requests
 
 from auth import auth_sidebar, require_plan
 
+auth_sidebar()
+require_plan("pro")
+
+# ── 取得個人 VLESS UUID ─────────────────────────────────────────────────────
+
+API_URL = os.getenv("API_URL", "http://localhost:8000")
+
+
+def _get_my_vless_uuid() -> str | None:
+    token = st.session_state.get("token", "")
+    if not token:
+        return None
+    try:
+        r = _requests.get(
+            f"{API_URL}/auth/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.ok:
+            return r.json().get("vless_uuid")
+    except Exception:
+        pass
+    return None
+
+
+user_uuid = _get_my_vless_uuid()
+if not user_uuid:
+    st.error("無法取得個人連線金鑰，請重新登入")
+    st.stop()
+
+# ── VLESS 連線資訊 ───────────────────────────────────────────────────────────
+
+VLESS_ADDR = "16888u.com"
+VLESS_PORT = 443
+VLESS_PATH = "/proxy-ws"
+
+vless_uri = (
+    f"vless://{user_uuid}@{VLESS_ADDR}:{VLESS_PORT}"
+    f"?encryption=none&security=tls&type=ws&host={VLESS_ADDR}&path=%2Fproxy-ws"
+    f"#TaifexAI-Proxy"
+)
 
 st.title("🧰 工具箱")
 st.caption("代理連線設定與開發工具離線安裝")

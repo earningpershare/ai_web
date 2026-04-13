@@ -11,6 +11,80 @@ from auth import auth_sidebar
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
+auth_sidebar()
+
+st.title("📊 市場快照")
+st.caption("三大法人期貨籌碼概覽 — 每交易日收盤後更新　🟢 免費公開")
+st.divider()
+
+
+# ── 資料載入 ──────────────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=600)
+def load_institutional_futures():
+    """往回查 30 天，確保假日/長假也能找到最近交易日"""
+    end = date.today()
+    start = end - timedelta(days=30)
+    try:
+        r = requests.get(
+            f"{API_URL}/institutional/futures",
+            params={
+                "start": str(start),
+                "end": str(end),
+                "contract": "臺股期貨",
+                "limit": 50,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=600)
+def load_retail_futures():
+    end = date.today()
+    start = end - timedelta(days=30)
+    try:
+        r = requests.get(
+            f"{API_URL}/retail/futures",
+            params={"start": str(start), "end": str(end), "limit": 10},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+data = load_institutional_futures()
+retail_data = [r for r in load_retail_futures() if r.get("contract_code") == "臺股期貨"]
+
+# 取得最新交易日與各法人資料
+if not data:
+    st.warning("暫無資料，可能尚未到交易日收盤時間，請稍後再試。")
+    st.stop()
+
+latest_date = data[0]["trade_date"]
+
+# 按最新日期篩選三大法人
+latest = {row["institution_type"]: row for row in data if row["trade_date"] == latest_date}
+
+# 取前一交易日（比較用）
+prev_dates = sorted({row["trade_date"] for row in data if row["trade_date"] != latest_date}, reverse=True)
+prev_date = prev_dates[0] if prev_dates else None
+prev = {row["institution_type"]: row for row in data if row["trade_date"] == prev_date} if prev_date else {}
+
+# ── 日期標題 ──────────────────────────────────────────────────────────────────
+
+st.markdown(
+    f'<div style="font-size:14px;color:#888;margin-bottom:4px">'
+    f'最新資料日期：<strong style="color:#e0e0e0">{latest_date}</strong>'
+    f'{"　前一交易日：" + prev_date if prev_date else ""}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── 三大法人淨口數指標 ─────────────────────────────────────────────────────────
