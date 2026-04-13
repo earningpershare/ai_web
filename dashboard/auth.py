@@ -24,21 +24,28 @@ def _hide_page(page_name: str):
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 _COOKIE_KEY = "auth_token"
+_LS_KEY = "taifex_auth_token"          # localStorage key（更可靠）
 _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
 
 
 def _set_cookie(token: str):
-    """用 JS 寫入 cookie"""
+    """用 JS 同時寫入 localStorage 和 cookie（雙保險）"""
     components.html(
-        f'<script>document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Strict";</script>',
+        f"""<script>
+        try {{ localStorage.setItem('{_LS_KEY}', '{token}'); }} catch(e) {{}}
+        document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";
+        </script>""",
         height=0,
     )
 
 
 def _delete_cookie():
-    """用 JS 刪除 cookie"""
+    """用 JS 同時清除 localStorage 和 cookie"""
     components.html(
-        f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Strict";</script>',
+        f"""<script>
+        try {{ localStorage.removeItem('{_LS_KEY}'); }} catch(e) {{}}
+        document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";
+        </script>""",
         height=0,
     )
 
@@ -400,16 +407,24 @@ def auth_sidebar():
             except Exception:
                 pass
         else:
-            # 注入 JS：讀 cookie，若有 token 就把它放到 query_params 再 reload
+            # 注入 JS：優先從 localStorage 取 token，備用 cookie，找到就 redirect 帶回 query_params
             components.html(
                 f"""<script>
-                var m = document.cookie.match('(^|;)\\\\s*{_COOKIE_KEY}=([^;]+)');
-                if (m) {{
-                    var t = m[2];
-                    var url = window.parent.location;
-                    var base = url.origin + url.pathname;
-                    window.parent.location.href = base + '?_auth_restore=' + encodeURIComponent(t);
-                }}
+                (function() {{
+                    var t = null;
+                    try {{ t = localStorage.getItem('{_LS_KEY}'); }} catch(e) {{}}
+                    if (!t) {{
+                        var m = document.cookie.match('(^|;)\\s*{_COOKIE_KEY}=([^;]+)');
+                        if (m) t = m[2];
+                    }}
+                    if (t) {{
+                        var url = window.parent.location;
+                        var base = url.origin + url.pathname;
+                        if (url.search.indexOf('_auth_restore') === -1) {{
+                            window.parent.location.href = base + '?_auth_restore=' + encodeURIComponent(t);
+                        }}
+                    }}
+                }})();
                 </script>""",
                 height=0,
             )
