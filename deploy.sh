@@ -73,6 +73,9 @@ echo "[VPS] commit: \$VPS_COMMIT"
 echo "[VPS] 重建容器 ($SERVICES)..."
 $DOCKER_BUILD 2>&1 | grep -E "Step|Successfully|error|ERROR|Starting|Started|Recreat" || true
 
+echo "[VPS] 清理舊 Docker images..."
+sudo docker image prune -af --filter "until=24h" 2>&1 | tail -3 || true
+
 echo "[VPS] 等待服務啟動 (5s)..."
 sleep 5
 
