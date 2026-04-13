@@ -48,21 +48,21 @@ is_admin = st.session_state.get("email", "").lower() == ADMIN_EMAIL
 
 # 所有人可見的頁面
 public_pages = [
-    st.Page("pages/01_market_overview.py", title="市場快照", icon="📊"),
-    st.Page("pages/02_options_map.py",     title="選擇權資金地圖", icon="💹"),
-    st.Page("pages/03_market_analysis.py", title="市場進階分析", icon="🔬"),
-    st.Page("pages/10_research.py",        title="研究報告", icon="📚"),
-    st.Page("pages/11_daily_ops.py",       title="每日操作", icon="📋"),
-    st.Page("pages/05_pricing.py",         title="方案與定價", icon="💎"),
-    st.Page("pages/06_account.py",         title="帳號設定", icon="👤"),
-    st.Page("pages/04_privacy.py",         title="隱私權政策", icon="🔏"),
+    st.Page("_pages/01_market_overview.py", title="市場快照", icon="📊"),
+    st.Page("_pages/02_options_map.py",     title="選擇權資金地圖", icon="💹"),
+    st.Page("_pages/03_market_analysis.py", title="市場進階分析", icon="🔬"),
+    st.Page("_pages/10_research.py",        title="研究報告", icon="📚"),
+    st.Page("_pages/11_daily_ops.py",       title="每日操作", icon="📋"),
+    st.Page("_pages/05_pricing.py",         title="方案與定價", icon="💎"),
+    st.Page("_pages/06_account.py",         title="帳號設定", icon="👤"),
+    st.Page("_pages/04_privacy.py",         title="隱私權政策", icon="🔏"),
 ]
 
 # 只有管理員才看得到
 admin_pages = [
-    st.Page("pages/07_tools.py",        title="工具箱", icon="🛠️"),
-    st.Page("pages/08_shadowrocket.py", title="Shadowrocket", icon="🚀"),
-    st.Page("pages/09_admin.py",        title="管理員後台", icon="⚙️"),
+    st.Page("_pages/07_tools.py",        title="工具箱", icon="🛠️"),
+    st.Page("_pages/08_shadowrocket.py", title="Shadowrocket", icon="🚀"),
+    st.Page("_pages/09_admin.py",        title="管理員後台", icon="⚙️"),
 ] if is_admin else []
 
 pg = st.navigation(public_pages + admin_pages)
