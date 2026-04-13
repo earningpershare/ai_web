@@ -33,7 +33,7 @@ def _api(method: str, endpoint: str, **kwargs):
 
 # ── 管理員：新增文章 Dialog ────────────────────────────────────────────────────
 
-@st.experimental_dialog("新增 / 編輯文章", width="large")
+@st.dialog("新增 / 編輯文章", width="large")
 def _article_dialog(existing: dict | None = None):
     """existing 為 None 時表示新增，否則為編輯"""
     d = existing or {}

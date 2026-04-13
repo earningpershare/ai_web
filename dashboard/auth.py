@@ -29,30 +29,27 @@ _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
 
 
 def _set_cookie(token: str):
-    """用 JS 同時寫入 localStorage 和 cookie（雙保險）"""
+    """用 JS 寫入 cookie（Streamlit 1.37 可用 st.context.cookies 在 server 端讀取）"""
     components.html(
-        f"""<script>
-        try {{ localStorage.setItem('{_LS_KEY}', '{token}'); }} catch(e) {{}}
-        document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";
-        </script>""",
+        f'<script>document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";</script>',
         height=0,
     )
 
 
 def _delete_cookie():
-    """用 JS 同時清除 localStorage 和 cookie"""
+    """用 JS 清除 cookie"""
     components.html(
-        f"""<script>
-        try {{ localStorage.removeItem('{_LS_KEY}'); }} catch(e) {{}}
-        document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";
-        </script>""",
+        f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";</script>',
         height=0,
     )
 
 
-def _get_cookie_from_query() -> str | None:
-    """從 query_params 讀取由 JS 轉寫的 cookie token"""
-    return st.query_params.get("_auth_restore")
+def _get_saved_token() -> str | None:
+    """從 HTTP cookie 直接讀取 token（Streamlit 1.37+ st.context.cookies）"""
+    try:
+        return st.context.cookies.get(_COOKIE_KEY) or None
+    except Exception:
+        return st.query_params.get("_auth_restore")
 
 PLAN_RANK = {"free": 0, "pro": 1, "ultimate": 2}
 PLAN_LABEL = {"free": "基礎版（免費）", "pro": "進階版", "ultimate": "終極版"}
@@ -381,14 +378,11 @@ def auth_sidebar():
     if st.session_state.get("email", "").lower() != "ohmygot65@yahoo.com.tw":
         _hide_page("09_admin")
 
-    # ── 從 cookie 還原 session（新分頁時）─────────────────────────
-    # 第一次載入：注入 JS 讀 cookie 並用 query_params 回傳 token
-    # 第二次載入（JS reload 後）：從 query_params 取得 token 並還原 session
+    # ── 從 cookie 還原 session（重整或新分頁時）──────────────────
+    # Streamlit 1.37+ 可在 server 端直接讀 HTTP cookie，不需要 JS redirect
     if not is_logged_in():
-        restore_token = _get_cookie_from_query()
+        restore_token = _get_saved_token()
         if restore_token:
-            # 從 JS redirect 帶回的 token，嘗試驗證
-            st.query_params.clear()
             try:
                 r = _requests.get(
                     f"{API_URL}/auth/me",
@@ -406,28 +400,6 @@ def auth_sidebar():
                     _delete_cookie()
             except Exception:
                 pass
-        else:
-            # 注入 JS：優先從 localStorage 取 token，備用 cookie，找到就 redirect 帶回 query_params
-            components.html(
-                f"""<script>
-                (function() {{
-                    var t = null;
-                    try {{ t = localStorage.getItem('{_LS_KEY}'); }} catch(e) {{}}
-                    if (!t) {{
-                        var m = document.cookie.match('(^|;)\\s*{_COOKIE_KEY}=([^;]+)');
-                        if (m) t = m[2];
-                    }}
-                    if (t) {{
-                        var url = window.parent.location;
-                        var base = url.origin + url.pathname;
-                        if (url.search.indexOf('_auth_restore') === -1) {{
-                            window.parent.location.href = base + '?_auth_restore=' + encodeURIComponent(t);
-                        }}
-                    }}
-                }})();
-                </script>""",
-                height=0,
-            )
 
     with st.sidebar:
         st.divider()

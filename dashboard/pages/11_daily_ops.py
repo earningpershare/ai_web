@@ -42,7 +42,7 @@ def _api(method: str, endpoint: str, **kwargs):
 
 # ── 管理員：新增 / 編輯 Dialog ─────────────────────────────────────────────────
 
-@st.experimental_dialog("新增 / 編輯每日操作", width="large")
+@st.dialog("新增 / 編輯每日操作", width="large")
 def _op_dialog(existing: dict | None = None):
     """existing 為 None 時表示新增，否則為編輯"""
     d = existing or {}
