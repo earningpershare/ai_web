@@ -378,7 +378,8 @@ def auth_sidebar():
 
     # ── 從 cookie 還原 session（重整或新分頁時）──────────────────
     # Streamlit 1.37+ 可在 server 端直接讀 HTTP cookie，不需要 JS redirect
-    if not is_logged_in():
+    # _logged_out flag 防止登出後同一 render 又被 restore 回來
+    if not is_logged_in() and not st.session_state.get("_logged_out"):
         restore_token = _get_saved_token()
         if restore_token:
             try:
@@ -421,6 +422,7 @@ def auth_sidebar():
                 _delete_cookie()
                 for k in ["token", "email", "plan", "email_verified"]:
                     st.session_state.pop(k, None)
+                st.session_state["_logged_out"] = True  # 防止 cookie restore 立即重新登入
                 st.rerun()
         else:
             st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
