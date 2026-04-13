@@ -6,10 +6,11 @@
 import os
 import requests
 import streamlit as st
+import streamlit.components.v1 as _components
 from auth import (
     auth_sidebar, is_logged_in, has_plan, show_login_modal,
-    PLAN_LABEL, _get_saved_token, _delete_cookie, API_URL,
-    _COOKIE_KEY,
+    PLAN_LABEL, _get_saved_token, _set_cookie, _delete_cookie, API_URL,
+    _COOKIE_KEY, _COOKIE_MAX_AGE,
 )
 
 ADMIN_EMAIL = "ohmygot65@yahoo.com.tw"
@@ -20,6 +21,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ── 頂層：消化 dialog 裡留下的 pending cookie 請求 ───────────────────────────
+# @st.dialog 內的 components.html 不可靠；改由此處（主流程）執行
+if "_pending_set_cookie" in st.session_state:
+    _set_cookie(st.session_state.pop("_pending_set_cookie"))
 
 # ── 從 cookie 還原 session（在 navigation 之前執行）──────────────────────────
 if not is_logged_in() and not st.session_state.get("_logged_out"):
@@ -82,11 +88,7 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
         if st.button("登出", key="_sidebar_logout", use_container_width=True):
-            import streamlit.components.v1 as components
-            components.html(
-                f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";</script>',
-                height=0,
-            )
+            _delete_cookie()
             for k in ["token", "email", "plan", "email_verified"]:
                 st.session_state.pop(k, None)
             st.session_state["_logged_out"] = True

@@ -29,18 +29,18 @@ _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
 
 
 def _set_cookie(token: str):
-    """用 JS 寫入 cookie（Streamlit 1.37 可用 st.context.cookies 在 server 端讀取）"""
+    """用 JS 寫入 cookie。必須在 app.py 頂層呼叫，不可在 @st.dialog 內呼叫。"""
     components.html(
         f'<script>document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";</script>',
-        height=0,
+        height=1,
     )
 
 
 def _delete_cookie():
-    """用 JS 清除 cookie"""
+    """用 JS 清除 cookie。必須在 app.py 頂層呼叫，不可在 @st.dialog 內呼叫。"""
     components.html(
         f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";</script>',
-        height=0,
+        height=1,
     )
 
 
@@ -82,7 +82,8 @@ def _save_session(token: str, email: str, plan: str, email_verified: bool = Fals
     st.session_state["email"] = email
     st.session_state["plan"] = plan
     st.session_state["email_verified"] = email_verified
-    _set_cookie(token)
+    # 不在此直接設 cookie（可能在 @st.dialog 內），改由 app.py 頂層偵測 flag 後執行
+    st.session_state["_pending_set_cookie"] = token
 
 
 def is_logged_in() -> bool:
@@ -278,7 +279,7 @@ def _show_locked_wall(reason: str, required: str = "pro"):
         _, col2, _ = st.columns([1, 1, 1])
         with col2:
             if st.button("查看方案", key="_wall_upgrade_btn", use_container_width=True, type="primary"):
-                st.switch_page("pages/05_pricing.py")
+                st.switch_page("_pages/05_pricing.py")
 
 
 # ── Blur Gate 模糊預覽遮罩 ────────────────────────────────────────────────────
@@ -357,7 +358,7 @@ def show_blur_gate(page_name: str, min_plan: str = "pro"):
                 use_container_width=True,
                 type="primary",
             ):
-                st.switch_page("pages/05_pricing.py")
+                st.switch_page("_pages/05_pricing.py")
         else:
             if st.button(
                 "免費註冊 + 升級解鎖完整功能",
@@ -365,7 +366,7 @@ def show_blur_gate(page_name: str, min_plan: str = "pro"):
                 use_container_width=True,
                 type="primary",
             ):
-                st.switch_page("pages/05_pricing.py")
+                st.switch_page("_pages/05_pricing.py")
 
     st.stop()
 
