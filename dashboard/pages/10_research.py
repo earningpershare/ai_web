@@ -130,7 +130,7 @@ for art in articles:
     if is_admin:
         col_art, col_ops = st.columns([5, 1])
     else:
-        col_art = st
+        col_art = st.container()
         col_ops = None
 
     with col_art:
