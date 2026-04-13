@@ -60,3 +60,4 @@ free (0) → pro (1) → ultimate (2)
 | `/pm` | 專案經理 | 進度追蹤、週報、changelog |
 | `/devops` | DevOps | 部署、監控、健康檢查 |
 | `/qa` | 數據品質分析師 | 比對官網 vs DB、找聚合邏輯問題 |
+| `/researcher` | AI 研究員 | 提出籌碼假設、用 finlab 回測驗證、發布研究文章 |

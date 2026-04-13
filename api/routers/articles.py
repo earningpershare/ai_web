@@ -101,7 +101,7 @@ def create_article(body: ArticleBody, authorization: str = Header(default="")):
                     body.is_published,
                 ),
             )
-            row = dict(cur.next())
+            row = dict(cur.fetchone())
         conn.commit()
     log.info("管理員新增文章 id=%s title=%s", row["id"], row["title"])
     return row

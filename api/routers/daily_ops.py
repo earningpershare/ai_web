@@ -114,7 +114,7 @@ def create_daily_op(body: DailyOpBody, authorization: str = Header(default="")):
                     body.is_published,
                 ),
             )
-            row = dict(cur.next())
+            row = dict(cur.fetchone())
         conn.commit()
     log.info("管理員新增操作日誌 id=%s trade_date=%s", row["id"], row["trade_date"])
     return row
