@@ -127,11 +127,11 @@ for art in articles:
     summary_str = art.get("summary") or ""
 
     # 標題列
-    col_art, col_ops = st.columns([5, 1]) if is_admin else (st, None), None
     if is_admin:
         col_art, col_ops = st.columns([5, 1])
     else:
         col_art = st
+        col_ops = None
 
     with col_art:
         with st.expander(f"**{art['title']}**　`{published}`　{author_str}", expanded=False):
