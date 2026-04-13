@@ -373,61 +373,12 @@ def show_blur_gate(page_name: str, min_plan: str = "pro"):
 # ── Sidebar 使用者狀態 ────────────────────────────────────────────────────────
 
 def auth_sidebar():
-    """在 sidebar 顯示登入狀態，每頁呼叫一次。"""
-    _hide_page("verify_email")
-
-    # ── 從 cookie 還原 session（重整或新分頁時）──────────────────
-    # Streamlit 1.37+ 可在 server 端直接讀 HTTP cookie，不需要 JS redirect
-    # _logged_out flag 防止登出後同一 render 又被 restore 回來
-    if not is_logged_in() and not st.session_state.get("_logged_out"):
-        restore_token = _get_saved_token()
-        if restore_token:
-            try:
-                r = _requests.get(
-                    f"{API_URL}/auth/me",
-                    headers={"Authorization": f"Bearer {restore_token}"},
-                    timeout=10,
-                )
-                if r.ok:
-                    data = r.json()
-                    st.session_state["token"] = restore_token
-                    st.session_state["email"] = data["email"]
-                    st.session_state["plan"] = data["plan"]
-                    st.session_state["email_verified"] = data.get("email_verified", False)
-                    st.rerun()
-                else:
-                    _delete_cookie()
-            except Exception:
-                pass
-
-    # admin 頁面：只有管理員帳號才顯示（必須在 session restore 後才判斷）
-    if st.session_state.get("email", "").lower() != "ohmygot65@yahoo.com.tw":
-        _hide_page("09_admin")
-
-    with st.sidebar:
-        st.divider()
-        if is_logged_in():
-            plan = current_plan()
-            color = PLAN_COLOR.get(plan, "#888")
-            label = PLAN_LABEL.get(plan, plan)
-            email = st.session_state.get("email", "")
-
-            st.markdown(
-                f'<div style="font-size:12px;color:#aaa">{email}</div>'
-                f'<div style="font-size:13px;font-weight:bold;color:{color}">● {label}</div>',
-                unsafe_allow_html=True,
-            )
-
-            if st.button("登出", key="_sidebar_logout", use_container_width=True):
-                _delete_cookie()
-                for k in ["token", "email", "plan", "email_verified"]:
-                    st.session_state.pop(k, None)
-                st.session_state["_logged_out"] = True  # 防止 cookie restore 立即重新登入
-                st.rerun()
-        else:
-            st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
-            if st.button("登入 / 註冊", key="_sidebar_login", use_container_width=True, type="primary"):
-                show_login_modal()
+    """
+    各子頁面呼叫此函式以保持相容性。
+    Session restore 和 sidebar UI 已統一由 app.py 的 st.navigation() 架構處理。
+    此函式保留供舊頁面呼叫，不做任何操作。
+    """
+    pass
 
 
 def _resend_by_email(email: str):

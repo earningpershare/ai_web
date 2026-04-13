@@ -1,14 +1,18 @@
 """
-台指天空 SpaceTFX — 首頁
+台指天空 SpaceTFX — 首頁入口
+使用 st.navigation() 動態控制頁面清單，確保 admin/tools/shadowrocket
+只有管理員登入後才出現在 sidebar。
 """
 import os
-from datetime import date, timedelta
-
 import requests
 import streamlit as st
-from auth import auth_sidebar, is_logged_in, has_plan, show_login_modal, PLAN_LABEL
+from auth import (
+    auth_sidebar, is_logged_in, has_plan, show_login_modal,
+    PLAN_LABEL, _get_saved_token, _delete_cookie, API_URL,
+    _COOKIE_KEY,
+)
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+ADMIN_EMAIL = "ohmygot65@yahoo.com.tw"
 
 st.set_page_config(
     page_title="台指天空 SpaceTFX",
@@ -17,7 +21,80 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-auth_sidebar()
+# ── 從 cookie 還原 session（在 navigation 之前執行）──────────────────────────
+if not is_logged_in() and not st.session_state.get("_logged_out"):
+    restore_token = _get_saved_token()
+    if restore_token:
+        try:
+            r = requests.get(
+                f"{API_URL}/auth/me",
+                headers={"Authorization": f"Bearer {restore_token}"},
+                timeout=10,
+            )
+            if r.ok:
+                data = r.json()
+                st.session_state["token"] = restore_token
+                st.session_state["email"] = data["email"]
+                st.session_state["plan"] = data["plan"]
+                st.session_state["email_verified"] = data.get("email_verified", False)
+                st.rerun()
+            else:
+                _delete_cookie()
+        except Exception:
+            pass
+
+# ── 動態建立頁面清單 ──────────────────────────────────────────────────────────
+is_admin = st.session_state.get("email", "").lower() == ADMIN_EMAIL
+
+# 所有人可見的頁面
+public_pages = [
+    st.Page("pages/01_market_overview.py", title="市場快照", icon="📊"),
+    st.Page("pages/02_options_map.py",     title="選擇權資金地圖", icon="💹"),
+    st.Page("pages/03_market_analysis.py", title="市場進階分析", icon="🔬"),
+    st.Page("pages/10_research.py",        title="研究報告", icon="📚"),
+    st.Page("pages/11_daily_ops.py",       title="每日操作", icon="📋"),
+    st.Page("pages/05_pricing.py",         title="方案與定價", icon="💎"),
+    st.Page("pages/06_account.py",         title="帳號設定", icon="👤"),
+    st.Page("pages/04_privacy.py",         title="隱私權政策", icon="🔏"),
+]
+
+# 只有管理員才看得到
+admin_pages = [
+    st.Page("pages/07_tools.py",        title="工具箱", icon="🛠️"),
+    st.Page("pages/08_shadowrocket.py", title="Shadowrocket", icon="🚀"),
+    st.Page("pages/09_admin.py",        title="管理員後台", icon="⚙️"),
+] if is_admin else []
+
+pg = st.navigation(public_pages + admin_pages)
+
+# ── Sidebar 登入/登出 UI ──────────────────────────────────────────────────────
+with st.sidebar:
+    st.divider()
+    if is_logged_in():
+        from auth import current_plan, PLAN_COLOR
+        plan  = current_plan()
+        color = PLAN_COLOR.get(plan, "#888")
+        label = PLAN_LABEL.get(plan, plan)
+        email = st.session_state.get("email", "")
+        st.markdown(
+            f'<div style="font-size:12px;color:#aaa">{email}</div>'
+            f'<div style="font-size:13px;font-weight:bold;color:{color}">● {label}</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("登出", key="_sidebar_logout", use_container_width=True):
+            import streamlit.components.v1 as components
+            components.html(
+                f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";</script>',
+                height=0,
+            )
+            for k in ["token", "email", "plan", "email_verified"]:
+                st.session_state.pop(k, None)
+            st.session_state["_logged_out"] = True
+            st.rerun()
+    else:
+        st.markdown('<div style="font-size:13px;color:#aaa">尚未登入</div>', unsafe_allow_html=True)
+        if st.button("登入 / 註冊", key="_sidebar_login", use_container_width=True, type="primary"):
+            show_login_modal()
 
 # 從驗證信點擊後 redirect 回首頁（?verified=1），自動清參數並彈出登入框
 if st.query_params.get("verified") == "1":
@@ -26,136 +103,4 @@ if st.query_params.get("verified") == "1":
     if not is_logged_in():
         show_login_modal()
 
-st.title("🚀 台指天空 SpaceTFX")
-st.caption("從高空俯視台指市場　TAIFEX 籌碼數據平台")
-st.divider()
-
-st.warning(
-    "⚠️ **免責聲明**　本網站所有資料均源自台灣期貨交易所（TAIFEX）公開資訊，"
-    "僅供資料呈現與學術研究用途，**不構成任何投資建議、期貨交易建議或買賣推薦**。"
-    "期貨交易涉及高度風險，可能損失全部本金。本網站不具期貨信託事業、期貨顧問事業"
-    "或任何金融從業資格，不得視為期貨投資分析意見。任何投資決策請自行評估風險，"
-    "並諮詢合格之期貨顧問。**過去的數據走勢不代表未來的交易結果。**"
-)
-
-st.divider()
-
-# ── 系統狀態 ─────────────────────────────────────────────────────────────────
-
-col1, col2, col3 = st.columns(3)
-
-try:
-    r = requests.get(f"{API_URL}/health", timeout=5)
-    api_ok = r.status_code == 200
-except Exception:
-    api_ok = False
-
-col1.metric("API 狀態", "✅ 正常" if api_ok else "❌ 離線")
-
-if api_ok:
-    try:
-        r = requests.get(f"{API_URL}/crawler-log", params={"limit": 1, "status": "success"}, timeout=5)
-        logs = r.json()
-        last_run = logs[0]["executed_at"][:10] if logs else "—"
-    except Exception:
-        last_run = "—"
-    col2.metric("最後爬蟲時間", last_run)
-
-    try:
-        r = requests.get(f"{API_URL}/market/max-pain", params={"limit": 1}, timeout=5)
-        mp = r.json()
-        last_data = mp[0]["trade_date"] if mp else "—"
-    except Exception:
-        last_data = "—"
-    col3.metric("最新資料日期", last_data)
-
-st.divider()
-
-# ── 功能頁面 ──────────────────────────────────────────────────────────────────
-
-st.subheader("功能頁面")
-
-FREE_BADGE = "🟢 免費"
-PRO_BADGE  = "🔵 進階版"
-
-# 免費功能
-with st.container(border=True):
-    st.markdown(f"**📊 市場快照** &nbsp; `{FREE_BADGE}`")
-    st.markdown(
-        "- 三大法人期貨淨未平倉口數（最新 + 近 5 日趨勢）\n"
-        "- 散戶期貨多空部位概況\n"
-        "- 升級 CTA（引導查看完整分析）"
-    )
-    if st.button("前往頁面 →", key="_go_01", use_container_width=True):
-        st.switch_page("pages/01_market_overview.py")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-c1, c2 = st.columns(2)
-
-with c1:
-    # 付費功能
-    locked = not (is_logged_in() and has_plan("pro"))
-    badge = PRO_BADGE if locked else f"{PRO_BADGE} ✅"
-    with st.container(border=True):
-        st.markdown(f"**📊 選擇權資金地圖** &nbsp; `{badge}`")
-        st.markdown(
-            "- 選擇權 T 字報價表 + 各履約價資金分布（含歷史累積成本色彩）\n"
-            "- 外資 / 散戶 BC / BP / SC / SP 每日變化\n"
-            "- 各身份別持倉比例圓餅圖\n"
-            "- ITM / OTM 未平倉分布\n"
-            "- PCR、Max Pain、關鍵價位"
-        )
-        if locked:
-            if st.button("🔒 解鎖此功能", key="_unlock_02", use_container_width=True, type="primary"):
-                if not is_logged_in():
-                    show_login_modal()
-                else:
-                    st.switch_page("pages/05_pricing.py")
-        else:
-            if st.button("前往頁面 →", key="_go_02", use_container_width=True):
-                st.switch_page("pages/02_options_map.py")
-
-with c2:
-    # 付費功能
-    locked = not (is_logged_in() and has_plan("pro"))
-    with st.container(border=True):
-        st.markdown(f"**🔬 市場進階分析** &nbsp; `{badge}`")
-        st.markdown(
-            "- ⭐⭐⭐ 外資累計 Delta 趨勢（期貨 + 選擇權合計，折算小台）\n"
-            "- ⭐⭐⭐ Max Pain 移動方向 vs 現價\n"
-            "- ⭐⭐⭐ 散戶買 Call 平均成本 vs 現價\n"
-            "- ⭐⭐ 週選 / 月選 OI 比重\n"
-            "- ⭐⭐ 外資選擇權金額流向（千元）"
-        )
-        if locked:
-            if st.button("🔒 解鎖此功能", key="_unlock_03", use_container_width=True, type="primary"):
-                if not is_logged_in():
-                    show_login_modal()
-                else:
-                    st.switch_page("pages/05_pricing.py")
-        else:
-            if st.button("前往頁面 →", key="_go_03", use_container_width=True):
-                st.switch_page("pages/03_market_analysis.py")
-
-st.divider()
-
-# ── 每日籌碼報告（付費功能說明） ──────────────────────────────────────────────
-
-with st.container(border=True):
-    st.markdown(f"**📧 每日籌碼觀察報告 Email** &nbsp; `{PRO_BADGE}`")
-    st.markdown(
-        "每個交易日收盤後，系統自動以 AI 分析當日籌碼數據並寄送報告至您的信箱。\n\n"
-        "訂閱進階版後，系統會以您的註冊 Email 自動加入寄送名單。"
-    )
-    if not (is_logged_in() and has_plan("pro")):
-        col_a, col_b = st.columns([1, 3])
-        with col_a:
-            if st.button("查看方案", key="_report_plan", use_container_width=True, type="primary"):
-                st.switch_page("pages/05_pricing.py")
-
-st.divider()
-st.caption(
-    "資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  更新頻率：每交易日收盤後自動彙整  |  "
-    "本站不提供投資建議  |  [隱私權政策](./04_privacy)"
-)
+pg.run()
