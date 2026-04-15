@@ -54,6 +54,7 @@ is_admin = st.session_state.get("email", "").lower() == ADMIN_EMAIL
 
 # 所有人可見的頁面
 public_pages = [
+    st.Page("_pages/00_resume.py",          title="關於作者", icon="👨‍💻"),
     st.Page("_pages/01_market_overview.py", title="市場快照", icon="📊"),
     st.Page("_pages/02_options_map.py",     title="選擇權資金地圖", icon="💹"),
     st.Page("_pages/03_market_analysis.py", title="市場進階分析", icon="🔬"),
