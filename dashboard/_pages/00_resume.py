@@ -214,7 +214,7 @@ jobs = [
         "role": "ETL 工程師（研發替代役）",
         "items": [
             ("🔍", "XML Parsing 自動化工具", " — 解析 IBM DataStage Job 依賴關係 + 視覺化樹狀圖"),
-            ("📱", "投資選股 APP 上架 App Store", " — 串接券商 API 實現秒級即時行情監控"),
+            ("📱", "投資選股 APP 上架 App Store", " — 每日更新的個股篩選與技術指標輔助工具"),
             ("🧹", "即時數據清洗機制", " — 確保券商報價數據正確性"),
         ]
     },
@@ -248,8 +248,8 @@ projects = [
     },
     {
         "icon": "📱", "name": "投資選股 APP",
-        "desc": "獨立開發並上架 App Store 的投資選股應用。串接券商 API 實現秒級即時行情監控，內建即時數據清洗邏輯。",
-        "tags": ["iOS", "Swift", "Broker API", "Real-time", "App Store"],
+        "desc": "獨立開發並上架 App Store 的每日更新選股應用，提供個股篩選與技術指標輔助判斷。",
+        "tags": ["iOS", "Swift", "App Store", "Stock Screening"],
     },
     {
         "icon": "🤖", "name": "AI Virtual Team",
