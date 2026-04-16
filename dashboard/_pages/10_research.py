@@ -159,7 +159,7 @@ for art in articles:
             if full_content:
                 st.markdown(full_content)
                 st.divider()
-                share_url = f"https://16888u.com/%E7%A0%94%E7%A9%B6%E5%A0%B1%E5%91%8A?aid={art_id}"
+                share_url = f"https://16888u.com/research?aid={art_id}"
                 import streamlit.components.v1 as _comp
                 _comp.html(f"""
                 <button onclick="

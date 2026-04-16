@@ -386,7 +386,7 @@ if not _has_plan("pro"):
     _, _cta2, _ = st.columns([1, 1, 1])
     with _cta2:
         if st.button("升級 Pro 解鎖完整功能 →", use_container_width=True, type="primary", key="_summary_cta"):
-            st.switch_page("pages/05_pricing.py")
+            st.switch_page("_pages/05_pricing.py")
     st.markdown("<br>", unsafe_allow_html=True)
 
 st.divider()
@@ -413,7 +413,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 _, cta_col, _ = st.columns([1, 1, 1])
 with cta_col:
     if st.button("查看進階版方案 →", use_container_width=True, type="primary", key="_overview_cta"):
-        st.switch_page("pages/05_pricing.py")
+        st.switch_page("_pages/05_pricing.py")
 
 st.divider()
 st.caption(

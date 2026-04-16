@@ -54,22 +54,22 @@ is_admin = st.session_state.get("email", "").lower() == ADMIN_EMAIL
 
 # 所有人可見的頁面
 public_pages = [
-    st.Page("_pages/00_resume.py",          title="關於作者", icon="👨‍💻"),
-    st.Page("_pages/01_market_overview.py", title="市場快照", icon="📊"),
-    st.Page("_pages/02_options_map.py",     title="選擇權資金地圖", icon="💹"),
-    st.Page("_pages/03_market_analysis.py", title="市場進階分析", icon="🔬"),
-    st.Page("_pages/10_research.py",        title="研究報告", icon="📚"),
-    st.Page("_pages/11_daily_ops.py",       title="每日操作", icon="📋"),
-    st.Page("_pages/05_pricing.py",         title="方案與定價", icon="💎"),
-    st.Page("_pages/06_account.py",         title="帳號設定", icon="👤"),
-    st.Page("_pages/04_privacy.py",         title="隱私權政策", icon="🔏"),
+    st.Page("_pages/00_resume.py",          title="關於作者", icon="👨‍💻", url_path="about"),
+    st.Page("_pages/01_market_overview.py", title="市場快照", icon="📊", url_path="market"),
+    st.Page("_pages/02_options_map.py",     title="選擇權資金地圖", icon="💹", url_path="options-map"),
+    st.Page("_pages/03_market_analysis.py", title="市場進階分析", icon="🔬", url_path="analysis"),
+    st.Page("_pages/10_research.py",        title="研究報告", icon="📚", url_path="research"),
+    st.Page("_pages/11_daily_ops.py",       title="每日操作", icon="📋", url_path="daily-ops"),
+    st.Page("_pages/05_pricing.py",         title="方案與定價", icon="💎", url_path="pricing"),
+    st.Page("_pages/06_account.py",         title="帳號設定", icon="👤", url_path="account"),
+    st.Page("_pages/04_privacy.py",         title="隱私權政策", icon="🔏", url_path="privacy"),
 ]
 
 # 只有管理員才看得到
 admin_pages = [
-    st.Page("_pages/07_tools.py",        title="工具箱", icon="🛠️"),
-    st.Page("_pages/08_shadowrocket.py", title="Shadowrocket", icon="🚀"),
-    st.Page("_pages/09_admin.py",        title="管理員後台", icon="⚙️"),
+    st.Page("_pages/07_tools.py",        title="工具箱", icon="🛠️", url_path="tools"),
+    st.Page("_pages/08_shadowrocket.py", title="Shadowrocket", icon="🚀", url_path="shadowrocket"),
+    st.Page("_pages/09_admin.py",        title="管理員後台", icon="⚙️", url_path="admin"),
 ] if is_admin else []
 
 pg = st.navigation(public_pages + admin_pages)

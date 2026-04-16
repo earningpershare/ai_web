@@ -113,7 +113,7 @@ with c2:
             unsafe_allow_html=True,
         )
         if st.button("升級方案", key="_acc_upgrade", use_container_width=True, type="primary"):
-            st.switch_page("pages/05_pricing.py")
+            st.switch_page("_pages/05_pricing.py")
 
 st.divider()
 
