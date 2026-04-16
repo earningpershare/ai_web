@@ -26,12 +26,12 @@ HEADERS = {
 }
 
 
-def _fetch_csv(url: str, trade_date: date) -> pd.DataFrame:
+def _fetch_csv(url: str, trade_date: date, commodity_id: str = "TX") -> pd.DataFrame:
     date_str = trade_date.strftime("%Y/%m/%d")
     params = {
         "queryStartDate": date_str,
         "queryEndDate": date_str,
-        "commodity_id": "TX",
+        "commodity_id": commodity_id,
     }
     resp = requests.get(url, params=params, headers=HEADERS, timeout=30)
     try:
@@ -43,7 +43,11 @@ def _fetch_csv(url: str, trade_date: date) -> pd.DataFrame:
 
 def _safe_int(v) -> int | None:
     try:
-        return int(float(str(v).replace(",", "")))
+        s = str(v).replace(",", "").strip()
+        # TAIFEX 用 "-" 或 "–" 表示無資料
+        if s in ("", "-", "–", "—", "nan", "None"):
+            return None
+        return int(float(s))
     except Exception:
         return None
 
@@ -66,13 +70,26 @@ def parse(df: pd.DataFrame, trade_date: date, contract_code: str) -> list[dict]:
         df = df[df[contract_col] == contract_code]
     if df.empty:
         return []
+
+    # 選擇權 CSV 含「買賣權」欄位（買權/賣權），需作為 trader_type 前綴
+    has_cp = "買賣權" in df.columns
+    if has_cp:
+        df["買賣權"] = df["買賣權"].astype(str).str.strip()
+
     records = []
     for _, row in df.iterrows():
         month_raw = str(row.get("到期月份(週別)", "")).strip().split(".")[0]
         trader_raw = str(row.get("交易人類別", "")).strip().split(".")[0]
         month_label = MONTH_LABEL.get(month_raw, month_raw)
         trader_label = TRADER_LABEL.get(trader_raw, trader_raw)
-        trader_type = f"{month_label}-{trader_label}"
+
+        # 選擇權加上買賣權前綴，期貨則不加
+        if has_cp:
+            cp = row.get("買賣權", "")
+            trader_type = f"{cp}-{month_label}-{trader_label}"
+        else:
+            trader_type = f"{month_label}-{trader_label}"
+
         records.append({
             "trade_date": trade_date,
             "contract_code": contract_code,
@@ -88,12 +105,12 @@ def run(trade_date: date):
     conn = get_connection()
     total = 0
     try:
-        fut_df = _fetch_csv(FUTURES_URL, trade_date)
+        fut_df = _fetch_csv(FUTURES_URL, trade_date, "TX")
         fut_records = parse(fut_df, trade_date, "TX")
         total += upsert(conn, "large_trader_positions", fut_records,
                         ["trade_date", "contract_code", "trader_type"])
 
-        opt_df = _fetch_csv(OPTIONS_URL, trade_date)
+        opt_df = _fetch_csv(OPTIONS_URL, trade_date, "TXO")
         opt_records = parse(opt_df, trade_date, "TXO")
         total += upsert(conn, "large_trader_positions", opt_records,
                         ["trade_date", "contract_code", "trader_type"])

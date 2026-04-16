@@ -1,5 +1,5 @@
 """
-市場進階分析 — 5 個方向性指標
+市場進階分析 — 6 個方向性指標
 """
 import os
 from datetime import date, timedelta
@@ -558,9 +558,126 @@ else:
     st.info("無三大法人選擇權金額資料")
 
 
-# ── 總結儀表板 ────────────────────────────────────────────────────────────────
+# ═══════════════════════════════════════════════════════════════════════════════
+# 指標 6：Put/Call Ratio 趨勢
+# ═══════════════════════════════════════════════════════════════════════════════
+
+st.header("⭐⭐⭐ 指標六：Put/Call Ratio (PCR) 趨勢")
+
+with st.expander("指標說明", expanded=True):
+    st.markdown("""
+**指標說明：** Put/Call Ratio 是賣權未平倉量（或成交量）除以買權未平倉量（或成交量）的比值，
+為衡量選擇權市場多空情緒的經典統計指標。
+**數據解讀（歷史統計觀察，不代表未來走勢）：**
+- **PCR > 1.0** → 賣權未平倉 > 買權未平倉，市場避險/保護性賣權需求較高（歷史上常出現於相對低檔，提供支撐的統計觀察）
+- **PCR 介於 0.8 ~ 1.0** → 多空情緒相對均衡
+- **PCR < 0.8** → 買權未平倉遠大於賣權，市場偏樂觀（歷史上可能出現過熱訊號）
+
+本指標為未平倉口數統計，不構成任何交易建議。
+    """)
+
+pcr_df = fetch("/pcr", params_range)
+if not pcr_df.empty:
+    pcr_df["trade_date"] = pd.to_datetime(pcr_df["trade_date"])
+    pcr_df = pcr_df.sort_values("trade_date")
+
+    # 將百分比值轉為比值（TAIFEX 原始值為百分比，例如 85.4 表示 0.854）
+    for c in ["pc_oi_ratio", "pc_vol_ratio"]:
+        if c in pcr_df.columns:
+            pcr_df[c] = pd.to_numeric(pcr_df[c], errors="coerce")
+    # 計算比值形式（若原始值為百分比形式則除以 100）
+    pcr_df["oi_ratio_val"] = pcr_df["pc_oi_ratio"].apply(
+        lambda x: x / 100.0 if pd.notna(x) and x > 5 else x
+    )
+    pcr_df["vol_ratio_val"] = pcr_df["pc_vol_ratio"].apply(
+        lambda x: x / 100.0 if pd.notna(x) and x > 5 else x
+    )
+
+    for c in ["call_oi", "put_oi", "call_volume", "put_volume"]:
+        if c in pcr_df.columns:
+            pcr_df[c] = pd.to_numeric(pcr_df[c], errors="coerce").fillna(0)
+
+    last_pcr = pcr_df.iloc[-1]
+    c1, c2, c3, c4 = st.columns(4)
+    oi_val = safe_float(last_pcr.get("oi_ratio_val"))
+    vol_val = safe_float(last_pcr.get("vol_ratio_val"))
+    c1.metric("PCR（未平倉比）", f"{oi_val:.3f}",
+              help="Put OI ÷ Call OI")
+    c2.metric("PCR（成交量比）", f"{vol_val:.3f}",
+              help="Put Volume ÷ Call Volume")
+    c3.metric("Put OI", f"{safe_int(last_pcr.get('put_oi')):,}",
+              help="賣權未平倉口數")
+    c4.metric("Call OI", f"{safe_int(last_pcr.get('call_oi')):,}",
+              help="買權未平倉口數")
+
+    # ── PCR 未平倉比趨勢圖 ──────────────────────────────────────────────────
+    fig_pcr = go.Figure()
+    fig_pcr.add_trace(go.Scatter(
+        x=pcr_df["trade_date"], y=pcr_df["oi_ratio_val"],
+        name="PCR（未平倉比）",
+        line=dict(color="#2196F3", width=2.5),
+        fill="tozeroy", fillcolor="rgba(33,150,243,0.08)",
+        hovertemplate="%{x}<br>PCR OI: %{y:.3f}<extra></extra>",
+    ))
+    if pcr_df["vol_ratio_val"].notna().any():
+        fig_pcr.add_trace(go.Scatter(
+            x=pcr_df["trade_date"], y=pcr_df["vol_ratio_val"],
+            name="PCR（成交量比）",
+            line=dict(color="#FF9800", width=1.5, dash="dot"),
+            hovertemplate="%{x}<br>PCR Vol: %{y:.3f}<extra></extra>",
+        ))
+
+    # 關鍵參考線
+    fig_pcr.add_hline(y=1.0, line_dash="dash", line_color="#F44336", line_width=1.5,
+                       annotation_text="1.0 多空分界",
+                       annotation_position="top left")
+    fig_pcr.add_hline(y=0.8, line_dash="dot", line_color="#4CAF50", line_width=1,
+                       annotation_text="0.8 偏多警戒",
+                       annotation_position="bottom left")
+    # 背景色帶：PCR > 1.0 區間淡紅、PCR < 0.8 區間淡綠
+    fig_pcr.add_hrect(y0=1.0, y1=max(pcr_df["oi_ratio_val"].max() * 1.05, 1.3),
+                       fillcolor="rgba(244,67,54,0.06)", line_width=0,
+                       annotation_text="避險保護區", annotation_position="top right",
+                       annotation_font_color="#F44336", annotation_font_size=10)
+    fig_pcr.add_hrect(y0=min(pcr_df["oi_ratio_val"].min() * 0.95, 0.5), y1=0.8,
+                       fillcolor="rgba(76,175,80,0.06)", line_width=0,
+                       annotation_text="偏多樂觀區", annotation_position="bottom right",
+                       annotation_font_color="#4CAF50", annotation_font_size=10)
+
+    fig_pcr.update_layout(
+        title="Put/Call Ratio 趨勢（>1.0 避險需求高，<0.8 市場偏樂觀）",
+        yaxis_title="PCR 比值", height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_pcr, use_container_width=True)
+
+    # ── Put / Call 未平倉口數堆疊圖 ────────────────────────────────────────────
+    fig_oi = go.Figure()
+    fig_oi.add_trace(go.Bar(
+        x=pcr_df["trade_date"], y=pcr_df["call_oi"],
+        name="Call OI（買權）", marker_color="#2196F3",
+        hovertemplate="%{x}<br>Call OI: %{y:,}<extra></extra>",
+    ))
+    fig_oi.add_trace(go.Bar(
+        x=pcr_df["trade_date"], y=pcr_df["put_oi"],
+        name="Put OI（賣權）", marker_color="#F44336",
+        hovertemplate="%{x}<br>Put OI: %{y:,}<extra></extra>",
+    ))
+    fig_oi.update_layout(
+        title="Put vs Call 未平倉口數對比",
+        barmode="group", yaxis_title="未平倉口數", height=340,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    st.plotly_chart(fig_oi, use_container_width=True)
+else:
+    st.info("無 PCR 資料，請確認 put_call_ratio 資料表已匯入數據。")
 
 st.divider()
+
+
+# ── 總結儀表板 ────────────────────────────────────────────────────────────────
+
 st.header("綜合指標速覽")
 
 if not dir_df.empty and not mp_df.empty and not ois_df.empty:
@@ -597,9 +714,19 @@ if not dir_df.empty and not mp_df.empty and not ois_df.empty:
     else:
         signals.append(("📊 週月選比重均衡", f"週選占比 {wr:.0f}%"))
 
-    col1, col2, col3 = st.columns(3)
-    for i, (title, detail) in enumerate(signals[:3]):
-        [col1, col2, col3][i].info(f"**{title}**\n\n{detail}")
+    # PCR 訊號
+    if not pcr_df.empty:
+        last_pcr_val = safe_float(pcr_df.iloc[-1].get("oi_ratio_val"))
+        if last_pcr_val > 1.0:
+            signals.append(("📊 PCR 偏高（避險需求）", f"PCR {last_pcr_val:.3f}"))
+        elif last_pcr_val < 0.8:
+            signals.append(("📊 PCR 偏低（市場樂觀）", f"PCR {last_pcr_val:.3f}"))
+        else:
+            signals.append(("📊 PCR 中性區間", f"PCR {last_pcr_val:.3f}"))
+
+    sig_cols = st.columns(len(signals[:4]))
+    for i, (title, detail) in enumerate(signals[:4]):
+        sig_cols[i].info(f"**{title}**\n\n{detail}")
 
 st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

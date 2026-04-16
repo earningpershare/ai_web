@@ -49,7 +49,11 @@ def _fetch_csv(url: str, trade_date: date) -> pd.DataFrame:
 
 def _safe_int(v) -> int | None:
     try:
-        return int(float(str(v).replace(",", "")))
+        s = str(v).replace(",", "").strip()
+        # TAIFEX 用 "-" 或 "–" 表示無資料
+        if s in ("", "-", "–", "—", "nan", "None"):
+            return None
+        return int(float(s))
     except Exception:
         return None
 

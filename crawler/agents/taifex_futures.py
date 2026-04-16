@@ -52,7 +52,11 @@ def parse(df: pd.DataFrame, trade_date: date) -> list[dict]:
     df.columns = [c.strip() for c in df.columns]
     def safe_int(v):
         try:
-            return int(float(str(v).replace(",", "") or 0))
+            s = str(v).replace(",", "").strip()
+            # TAIFEX 用 "-" 或 "–" 表示無資料
+            if s in ("", "-", "–", "—", "nan", "None"):
+                return 0
+            return int(float(s))
         except Exception:
             return 0
 
@@ -63,7 +67,11 @@ def parse(df: pd.DataFrame, trade_date: date) -> list[dict]:
             if pd.isna(v) if v is not None else False:
                 return None
             try:
-                return float(str(v).replace(",", ""))
+                s = str(v).replace(",", "").strip()
+                # TAIFEX 用 "-" 或 "–" 表示無資料
+                if s in ("", "-", "–", "—", "nan", "None"):
+                    return None
+                return float(s)
             except Exception:
                 return None
 
