@@ -449,14 +449,16 @@ else:
     top_p_new  = int(put_df["new_fund"].idxmax())    if not put_df.empty  else None
 
     def fund_bg(fund, max_fund, new_pct):
+        """深色主題背景色：橙=今日新增多，藍=舊有留倉"""
         if max_fund == 0:
-            return "#FFFFFF"
+            return "rgba(255,255,255,0.05)"
         ratio = min(fund / max_fund, 1.0)
         if new_pct > 0.30:
-            r = 255; g = int(255 - 155*ratio); b = int(255 - 220*ratio)
+            # 橙色系（新增比例高）
+            return f"rgba(255,152,0,{0.1 + ratio * 0.4})"
         else:
-            r = int(255 - 90*ratio); g = int(255 - 90*ratio); b = 255
-        return f"#{r:02X}{g:02X}{b:02X}"
+            # 藍色系（舊有留倉）
+            return f"rgba(66,165,245,{0.08 + ratio * 0.35})"
 
     rows_html = []
     for sp in reversed(all_strikes):
@@ -469,46 +471,46 @@ else:
         if c is not None:
             c_bg = fund_bg(c["total_fund"], max_cf, c["new_fund_pct"])
             c_ann = ("★ " if sp == top_c_fund else "") + ("🔥" if sp == top_c_new else "")
-            c_td = (f"<td style='background:{c_bg};text-align:right;padding:3px 6px'>"
+            c_td = (f"<td style='background:{c_bg};text-align:right;padding:3px 6px;color:#E0E0E0'>"
                     f"<b>{int(c['open_interest']):,}</b>&nbsp;"
-                    f"<small style='color:#555'>{c['total_fund']/10000:.1f}萬 {c_ann}</small><br>"
-                    f"<small style='color:#888'>新:{c['new_fund']/10000:.1f}萬({c['new_fund_pct']*100:.0f}%)</small>"
+                    f"<small style='color:#90CAF9'>{c['total_fund']/10000:.1f}萬 {c_ann}</small><br>"
+                    f"<small style='color:#BDBDBD'>新:{c['new_fund']/10000:.1f}萬({c['new_fund_pct']*100:.0f}%)</small>"
                     f"</td>"
-                    f"<td style='background:{c_bg};text-align:right;padding:3px 6px;color:#555'>"
+                    f"<td style='background:{c_bg};text-align:right;padding:3px 6px;color:#90CAF9'>"
                     f"<small>{c['avg_cost']:.0f}</small></td>")
         else:
-            c_td = "<td>─</td><td>─</td>"
+            c_td = "<td style='color:#757575'>─</td><td style='color:#757575'>─</td>"
 
         if p is not None:
             p_bg = fund_bg(p["total_fund"], max_pf, p["new_fund_pct"])
             p_ann = ("★ " if sp == top_p_fund else "") + ("🔥" if sp == top_p_new else "")
-            p_td = (f"<td style='background:{p_bg};text-align:left;padding:3px 6px;color:#555'>"
+            p_td = (f"<td style='background:{p_bg};text-align:left;padding:3px 6px;color:#EF9A9A'>"
                     f"<small>{p['avg_cost']:.0f}</small></td>"
-                    f"<td style='background:{p_bg};text-align:left;padding:3px 6px'>"
+                    f"<td style='background:{p_bg};text-align:left;padding:3px 6px;color:#E0E0E0'>"
                     f"<b>{int(p['open_interest']):,}</b>&nbsp;"
-                    f"<small style='color:#555'>{p['total_fund']/10000:.1f}萬 {p_ann}</small><br>"
-                    f"<small style='color:#888'>新:{p['new_fund']/10000:.1f}萬({p['new_fund_pct']*100:.0f}%)</small>"
+                    f"<small style='color:#EF9A9A'>{p['total_fund']/10000:.1f}萬 {p_ann}</small><br>"
+                    f"<small style='color:#BDBDBD'>新:{p['new_fund']/10000:.1f}萬({p['new_fund_pct']*100:.0f}%)</small>"
                     f"</td>")
         else:
-            p_td = "<td>─</td><td>─</td>"
+            p_td = "<td style='color:#757575'>─</td><td style='color:#757575'>─</td>"
 
-        sp_td = f"<td style='text-align:center;font-weight:bold;background:#ECEFF1;padding:3px 6px'>{sp:,.0f}{atm_tag}</td>"
+        sp_td = f"<td style='text-align:center;font-weight:bold;background:rgba(255,255,255,0.1);color:#FFD600;padding:3px 6px'>{sp:,.0f}{atm_tag}</td>"
         rows_html.append(f"<tr>{c_td}{sp_td}{p_td}</tr>")
 
     table_html = f"""
 <style>
 .tt{{font-size:12px;border-collapse:collapse;width:100%}}
-.tt td,.tt th{{border:1px solid #ddd}}
-.tt th{{padding:5px 8px;background:#37474F;color:white;text-align:center}}
+.tt td,.tt th{{border:1px solid rgba(255,255,255,0.15)}}
+.tt th{{padding:5px 8px;background:#1565C0;color:white;text-align:center}}
 </style>
 <table class='tt'><thead>
 <tr><th colspan='2'>◀ CALL 買權</th><th>履約價</th><th colspan='2'>PUT 賣權 ▶</th></tr>
 <tr><th>OI / 資金量</th><th>均成本</th><th></th><th>均成本</th><th>OI / 資金量</th></tr>
 </thead><tbody>{''.join(rows_html)}</tbody></table>
-<p style='font-size:11px;color:#666;margin-top:4px'>
+<p style='font-size:11px;color:#BDBDBD;margin-top:4px'>
 ★ 累積最大留倉 &nbsp;|&nbsp; 🔥 今日最多新增 &nbsp;|&nbsp;
-<span style='background:#FFD0A0;padding:1px 4px'>■ 橙色 = 今日新增 &gt;30%</span> &nbsp;
-<span style='background:#C0C0FF;padding:1px 4px'>■ 藍色 = 舊有留倉</span>
+<span style='background:rgba(255,152,0,0.4);padding:1px 6px;border-radius:3px'>■ 橙色 = 今日新增 &gt;30%</span> &nbsp;
+<span style='background:rgba(66,165,245,0.3);padding:1px 6px;border-radius:3px'>■ 藍色 = 舊有留倉</span>
 {"&nbsp;|&nbsp; F選已×0.25合併" if show_f_overlay and f_months else ""}
 </p>"""
     st.markdown(table_html, unsafe_allow_html=True)
@@ -552,33 +554,34 @@ def build_change_df(today_d: dict, prev_d: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 def show_change_table(df: pd.DataFrame, title: str):
-    """用純 HTML 渲染，完全避免 pandas Styler 與字串/整數的型別衝突"""
+    """用純 HTML 渲染，深色主題配色"""
     rows_html = []
     for _, row in df.iterrows():
         chg = int(row["變化"])
         pct = float(row["變化%"])
-        bg = "#E8F5E9" if chg > 0 else ("#FFEBEE" if chg < 0 else "#FFFFFF")
+        bg = "rgba(76,175,80,0.15)" if chg > 0 else ("rgba(244,67,54,0.15)" if chg < 0 else "rgba(255,255,255,0.03)")
+        chg_color = "#69F0AE" if chg > 0 else ("#FF5252" if chg < 0 else "#BDBDBD")
         arrow = "▲" if chg > 0 else ("▼" if chg < 0 else "─")
         chg_str = f"{arrow}{abs(chg):,}"
         pct_str = f"{pct:+.1f}%"
         rows_html.append(
             f"<tr style='background:{bg}'>"
-            f"<td style='padding:4px 8px'>{row['操作']}</td>"
-            f"<td style='padding:4px 8px;text-align:right'>{int(row['今日']):,}</td>"
-            f"<td style='padding:4px 8px;text-align:right'>{int(row['昨日']):,}</td>"
-            f"<td style='padding:4px 8px;text-align:right;font-weight:bold'>{chg_str}</td>"
-            f"<td style='padding:4px 8px;text-align:right'>{pct_str}</td>"
+            f"<td style='padding:4px 8px;color:#E0E0E0'>{row['操作']}</td>"
+            f"<td style='padding:4px 8px;text-align:right;color:#E0E0E0'>{int(row['今日']):,}</td>"
+            f"<td style='padding:4px 8px;text-align:right;color:#9E9E9E'>{int(row['昨日']):,}</td>"
+            f"<td style='padding:4px 8px;text-align:right;font-weight:bold;color:{chg_color}'>{chg_str}</td>"
+            f"<td style='padding:4px 8px;text-align:right;color:{chg_color}'>{pct_str}</td>"
             f"</tr>"
         )
     html = (
-        f"<p style='font-size:13px;font-weight:bold;margin:8px 0 2px'>{title}</p>"
-        "<table style='font-size:12px;border-collapse:collapse;width:100%'>"
-        "<thead><tr style='background:#37474F;color:white'>"
-        "<th style='padding:4px 8px'>操作</th>"
-        "<th style='padding:4px 8px;text-align:right'>今日</th>"
-        "<th style='padding:4px 8px;text-align:right'>昨日</th>"
-        "<th style='padding:4px 8px;text-align:right'>變化</th>"
-        "<th style='padding:4px 8px;text-align:right'>變化%</th>"
+        f"<p style='font-size:13px;font-weight:bold;margin:8px 0 2px;color:#E0E0E0'>{title}</p>"
+        "<table style='font-size:12px;border-collapse:collapse;width:100%;border:1px solid rgba(255,255,255,0.15)'>"
+        "<thead><tr style='background:#1565C0;color:white'>"
+        "<th style='padding:4px 8px;border:1px solid rgba(255,255,255,0.15)'>操作</th>"
+        "<th style='padding:4px 8px;text-align:right;border:1px solid rgba(255,255,255,0.15)'>今日</th>"
+        "<th style='padding:4px 8px;text-align:right;border:1px solid rgba(255,255,255,0.15)'>昨日</th>"
+        "<th style='padding:4px 8px;text-align:right;border:1px solid rgba(255,255,255,0.15)'>變化</th>"
+        "<th style='padding:4px 8px;text-align:right;border:1px solid rgba(255,255,255,0.15)'>變化%</th>"
         "</tr></thead>"
         f"<tbody>{''.join(rows_html)}</tbody></table>"
     )
