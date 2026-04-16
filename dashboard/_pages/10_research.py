@@ -151,6 +151,30 @@ for art in articles:
             full_content = st.session_state.get(f"_art_full_{art_id}")
             if full_content:
                 st.markdown(full_content)
+                st.divider()
+                # 分享按鈕
+                share_title = art["title"].replace('"', '&quot;')
+                share_url = "https://16888u.com"
+                share_text = f"{share_title} — 台指天空 SpaceTFX 研究報告"
+                st.markdown(f"""
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 4px;">
+                    <a href="https://line.me/R/share?text={share_text}%0A{share_url}" target="_blank" rel="noopener"
+                       style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
+                              background:#06C755;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">
+                        💬 分享到 LINE
+                    </a>
+                    <a href="https://www.facebook.com/sharer/sharer.php?u={share_url}&quote={share_text}" target="_blank" rel="noopener"
+                       style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
+                              background:#1877F2;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">
+                        📘 分享到 Facebook
+                    </a>
+                    <a href="https://twitter.com/intent/tweet?text={share_text}&url={share_url}" target="_blank" rel="noopener"
+                       style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
+                              background:#1DA1F2;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">
+                        🐦 分享到 X
+                    </a>
+                </div>
+                """, unsafe_allow_html=True)
 
     if is_admin and col_ops:
         with col_ops:
