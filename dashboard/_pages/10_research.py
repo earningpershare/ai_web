@@ -106,6 +106,18 @@ if "_articles_cache" not in st.session_state or st.session_state.pop("refresh_ar
 
 articles = st.session_state.get("_articles_cache", [])
 
+# 從 query param 自動載入指定文章（分享連結用）
+_linked_aid = st.query_params.get("aid")
+if _linked_aid:
+    try:
+        _linked_aid = int(_linked_aid)
+        if f"_art_full_{_linked_aid}" not in st.session_state:
+            detail, _ = _api("get", f"/articles/{_linked_aid}")
+            if detail:
+                st.session_state[f"_art_full_{_linked_aid}"] = detail.get("content", "")
+    except (ValueError, TypeError):
+        pass
+
 if not articles:
     st.info("目前尚無發布的研究文章，敬請期待。")
     st.stop()
@@ -133,7 +145,8 @@ for art in articles:
         col_ops = None
 
     with col_art:
-        with st.expander(f"**{art['title']}**　`{published}`　{author_str}", expanded=False):
+        _auto_expand = (_linked_aid == art_id)
+        with st.expander(f"**{art['title']}**　`{published}`　{author_str}", expanded=_auto_expand):
             if tags_html:
                 st.markdown(tags_html, unsafe_allow_html=True)
                 st.write("")
@@ -154,7 +167,7 @@ for art in articles:
                 st.divider()
                 # 分享按鈕
                 share_title = art["title"].replace('"', '&quot;')
-                share_url = "https://16888u.com"
+                share_url = f"https://16888u.com/%E7%A0%94%E7%A9%B6%E5%A0%B1%E5%91%8A?aid={art_id}"
                 share_text = f"{share_title} — 台指天空 SpaceTFX 研究報告"
                 st.markdown(f"""
                 <div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 4px;">
