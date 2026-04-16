@@ -104,6 +104,265 @@ st.sidebar.caption(f"今日: {selected_date}　前日: {prev_date}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 0: 莊家地圖 — 賣方壓力/支撐帶總覽
+# ═══════════════════════════════════════════════════════════════════════════════
+
+st.header("🎯 莊家地圖 — 賣方壓力 / 支撐帶")
+
+dealer_data = None
+try:
+    _r = requests.get(f"{API_URL}/market/dealer-map", params={"trade_date": str(selected_date)}, timeout=15)
+    if _r.ok:
+        dealer_data = _r.json()
+except Exception:
+    pass
+
+if dealer_data and dealer_data.get("strikes"):
+    _dd = dealer_data
+    _underlying = float(_dd["underlying"]) if _dd.get("underlying") else None
+    _strikes_raw = pd.DataFrame(_dd["strikes"])
+    for _c in ["strike_price", "open_interest", "delta_oi", "avg_cost"]:
+        _strikes_raw[_c] = pd.to_numeric(_strikes_raw[_c], errors="coerce").fillna(0)
+
+    # 分離 Call / Put，依 delta_oi 和 OI 排序找壓力/支撐
+    _calls = _strikes_raw[_strikes_raw["call_put"] == "C"].copy()
+    _puts = _strikes_raw[_strikes_raw["call_put"] == "P"].copy()
+
+    # 上方壓力：Call OI 最大 + Call delta_oi 最大（取前 5）
+    _call_by_oi = _calls.nlargest(5, "open_interest")
+    _call_by_delta = _calls[_calls["delta_oi"] > 0].nlargest(5, "delta_oi")
+    # 下方支撐：Put OI 最大 + Put delta_oi 最大（取前 5）
+    _put_by_oi = _puts.nlargest(5, "open_interest")
+    _put_by_delta = _puts[_puts["delta_oi"] > 0].nlargest(5, "delta_oi")
+
+    # 最大壓力/支撐價
+    _top_call_strike = float(_call_by_oi.iloc[0]["strike_price"]) if not _call_by_oi.empty else None
+    _top_put_strike = float(_put_by_oi.iloc[0]["strike_price"]) if not _put_by_oi.empty else None
+    _top_call_delta_strike = float(_call_by_delta.iloc[0]["strike_price"]) if not _call_by_delta.empty else None
+    _top_put_delta_strike = float(_put_by_delta.iloc[0]["strike_price"]) if not _put_by_delta.empty else None
+
+    # 賣方損益兩平
+    _call_breakeven = None
+    if _top_call_strike and not _call_by_oi.empty:
+        _call_avg = float(_call_by_oi.iloc[0]["avg_cost"])
+        _call_breakeven = _top_call_strike + _call_avg
+    _put_breakeven = None
+    if _top_put_strike and not _put_by_oi.empty:
+        _put_avg = float(_put_by_oi.iloc[0]["avg_cost"])
+        _put_breakeven = _top_put_strike - _put_avg
+
+    # 壓力/支撐比：上方 Call delta_oi 總和 vs 下方 Put delta_oi 總和
+    _call_delta_sum = int(_calls[_calls["delta_oi"] > 0]["delta_oi"].sum())
+    _put_delta_sum = int(_puts[_puts["delta_oi"] > 0]["delta_oi"].sum())
+    _pressure_ratio = _call_delta_sum / max(_put_delta_sum, 1)
+
+    # 法人方向
+    _inst_map = {r["institution_type"]: r for r in (_dd.get("institutional") or [])}
+    _inst_prev_map = {r["institution_type"]: r for r in (_dd.get("institutional_prev") or [])}
+    _foreign = _inst_map.get("外資及陸資", {})
+    _foreign_prev = _inst_prev_map.get("外資及陸資", {})
+    _dealer = _inst_map.get("自營商", {})
+
+    # ── 頂部 metric 卡片 ────────────────────────────────────────────────────
+    _m1, _m2, _m3, _m4 = st.columns(4)
+    _m1.metric(
+        "🔴 最大壓力",
+        f"{_top_call_strike:,.0f}" if _top_call_strike else "N/A",
+        delta=f"今日新增最多 {_top_call_delta_strike:,.0f}" if _top_call_delta_strike else None,
+        delta_color="inverse",
+        help="Call OI 最大的履約價 = 賣方認為的天花板",
+    )
+    _m2.metric(
+        "🟢 最大支撐",
+        f"{_top_put_strike:,.0f}" if _top_put_strike else "N/A",
+        delta=f"今日新增最多 {_top_put_delta_strike:,.0f}" if _top_put_delta_strike else None,
+        help="Put OI 最大的履約價 = 賣方認為的地板",
+    )
+    _safe_range = ""
+    if _top_put_strike and _top_call_strike:
+        _safe_range = f"{_top_put_strike:,.0f} ~ {_top_call_strike:,.0f}"
+    _m3.metric("📐 安全範圍", _safe_range or "N/A",
+               help="最大 Put OI ~ 最大 Call OI 之間的結算區間預估")
+    _m4.metric("⚖️ 壓力/支撐比", f"{_pressure_ratio:.2f}",
+               delta="上壓 > 下撐" if _pressure_ratio > 1.2 else ("下撐 > 上壓" if _pressure_ratio < 0.8 else "均衡"),
+               delta_color="inverse" if _pressure_ratio > 1.2 else ("normal" if _pressure_ratio < 0.8 else "off"),
+               help="Call 新增 OI 總和 / Put 新增 OI 總和。>1 上方壓力較重，<1 下方支撐較強")
+
+    # ── 視覺化：壓力/支撐帶柱狀圖 ──────────────────────────────────────────
+    # 組合 Call（負值=上方壓力）和 Put（正值=下方支撐）的 delta_oi
+    _chart_calls = _calls[_calls["delta_oi"] != 0].copy()
+    _chart_puts = _puts[_puts["delta_oi"] != 0].copy()
+
+    fig_dealer = go.Figure()
+
+    # Call delta_oi（紅色，代表上方壓力）
+    if not _chart_calls.empty:
+        _chart_calls = _chart_calls.sort_values("strike_price")
+        fig_dealer.add_trace(go.Bar(
+            x=_chart_calls["strike_price"],
+            y=-_chart_calls["delta_oi"],  # 負值讓它往下長，視覺上代表「壓」
+            name="Sell Call 壓力（今日新增）",
+            marker_color="rgba(244,67,54,0.7)",
+            hovertemplate="履約價 %{x:,.0f}<br>Call ΔOI: %{customdata:,} 口<extra></extra>",
+            customdata=_chart_calls["delta_oi"],
+        ))
+
+    # Put delta_oi（綠色，代表下方支撐）
+    if not _chart_puts.empty:
+        _chart_puts = _chart_puts.sort_values("strike_price")
+        fig_dealer.add_trace(go.Bar(
+            x=_chart_puts["strike_price"],
+            y=_chart_puts["delta_oi"],  # 正值往上長，代表「撐」
+            name="Sell Put 支撐（今日新增）",
+            marker_color="rgba(76,175,80,0.7)",
+            hovertemplate="履約價 %{x:,.0f}<br>Put ΔOI: %{customdata:,} 口<extra></extra>",
+            customdata=_chart_puts["delta_oi"],
+        ))
+
+    # 現價線
+    if _underlying:
+        fig_dealer.add_vline(
+            x=_underlying, line_dash="dash", line_color="#FFD600", line_width=2,
+            annotation_text=f"現價 {_underlying:,.0f}",
+            annotation_position="top",
+            annotation_font_color="#FFD600",
+            annotation_font_size=13,
+        )
+
+    # 壓力/支撐標記線
+    if _top_call_strike:
+        fig_dealer.add_vline(x=_top_call_strike, line_dash="dot", line_color="#F44336",
+                             line_width=1, annotation_text=f"壓力 {_top_call_strike:,.0f}",
+                             annotation_position="bottom right",
+                             annotation_font_color="#F44336", annotation_font_size=10)
+    if _top_put_strike:
+        fig_dealer.add_vline(x=_top_put_strike, line_dash="dot", line_color="#4CAF50",
+                             line_width=1, annotation_text=f"支撐 {_top_put_strike:,.0f}",
+                             annotation_position="top left",
+                             annotation_font_color="#4CAF50", annotation_font_size=10)
+
+    fig_dealer.update_layout(
+        title="今日 OI 增減分布：紅色（Call 壓力）↓ vs 綠色（Put 支撐）↑",
+        xaxis_title="履約價", yaxis_title="ΔOI（口數）",
+        height=420, barmode="relative",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        hovermode="x unified",
+    )
+    st.plotly_chart(fig_dealer, use_container_width=True)
+
+    # ── 詳細表格：壓力帶 Top 5 + 支撐帶 Top 5 ────────────────────────────
+    _tc, _tp = st.columns(2)
+
+    with _tc:
+        st.markdown("##### 🔴 上方壓力帶（Call）")
+        _rows_c = []
+        _seen = set()
+        for _, r in pd.concat([_call_by_oi, _call_by_delta]).iterrows():
+            sp = float(r["strike_price"])
+            if sp in _seen:
+                continue
+            _seen.add(sp)
+            _be = sp + float(r["avg_cost"])
+            _rows_c.append({
+                "履約價": f"{sp:,.0f}",
+                "OI": f"{int(r['open_interest']):,}",
+                "今日ΔOI": f"+{int(r['delta_oi']):,}" if r["delta_oi"] > 0 else f"{int(r['delta_oi']):,}",
+                "均成本": f"{float(r['avg_cost']):.1f}",
+                "損益平衡": f"{_be:,.0f}",
+            })
+            if len(_rows_c) >= 5:
+                break
+        if _rows_c:
+            st.dataframe(pd.DataFrame(_rows_c), hide_index=True, use_container_width=True)
+        if _call_breakeven:
+            st.caption(f"最大壓力牆損益兩平點：**{_call_breakeven:,.0f}**（突破此價 = 賣方開始虧損）")
+
+    with _tp:
+        st.markdown("##### 🟢 下方支撐帶（Put）")
+        _rows_p = []
+        _seen = set()
+        for _, r in pd.concat([_put_by_oi, _put_by_delta]).iterrows():
+            sp = float(r["strike_price"])
+            if sp in _seen:
+                continue
+            _seen.add(sp)
+            _be = sp - float(r["avg_cost"])
+            _rows_p.append({
+                "履約價": f"{sp:,.0f}",
+                "OI": f"{int(r['open_interest']):,}",
+                "今日ΔOI": f"+{int(r['delta_oi']):,}" if r["delta_oi"] > 0 else f"{int(r['delta_oi']):,}",
+                "均成本": f"{float(r['avg_cost']):.1f}",
+                "損益平衡": f"{_be:,.0f}",
+            })
+            if len(_rows_p) >= 5:
+                break
+        if _rows_p:
+            st.dataframe(pd.DataFrame(_rows_p), hide_index=True, use_container_width=True)
+        if _put_breakeven:
+            st.caption(f"最大支撐牆損益兩平點：**{_put_breakeven:,.0f}**（跌破此價 = 賣方開始虧損）")
+
+    # ── 法人方向 ──────────────────────────────────────────────────────────
+    st.markdown("##### 📊 法人選擇權方向")
+    _fc1, _fc2, _fc3 = st.columns(3)
+
+    _f_call_net = safe_int(_foreign.get("call_net_oi"))
+    _f_put_net = safe_int(_foreign.get("put_net_oi"))
+    _f_call_net_prev = safe_int(_foreign_prev.get("call_net_oi"))
+    _f_put_net_prev = safe_int(_foreign_prev.get("put_net_oi"))
+    _f_call_chg = _f_call_net - _f_call_net_prev if _foreign_prev else None
+    _f_put_chg = _f_put_net - _f_put_net_prev if _foreign_prev else None
+
+    _fc1.metric("外資 Call 淨OI", f"{_f_call_net:+,}",
+                delta=f"{_f_call_chg:+,}" if _f_call_chg is not None else None,
+                help="正值=淨買 Call（偏多），負值=淨賣 Call（偏空）")
+    _fc2.metric("外資 Put 淨OI", f"{_f_put_net:+,}",
+                delta=f"{_f_put_chg:+,}" if _f_put_chg is not None else None,
+                help="正值=淨買 Put（偏避險），負值=淨賣 Put（偏多、收權利金）")
+
+    # 外資綜合方向判讀
+    _direction = "中性"
+    _dir_icon = "⚖️"
+    if _f_call_net > 0 and _f_put_net < 0:
+        _direction = "偏多（買 Call + 賣 Put）"
+        _dir_icon = "🟢"
+    elif _f_call_net < 0 and _f_put_net > 0:
+        _direction = "偏空（賣 Call + 買 Put）"
+        _dir_icon = "🔴"
+    elif _f_call_net > 0 and _f_put_net > 0:
+        _direction = "避險（雙買）"
+        _dir_icon = "🟡"
+    elif _f_call_net < 0 and _f_put_net < 0:
+        _direction = "收租（雙賣）"
+        _dir_icon = "💰"
+    _fc3.metric(f"{_dir_icon} 外資方向研判", _direction,
+                help="根據外資 Call/Put 淨 OI 方向綜合判斷（歷史統計觀察）")
+
+    # PCR + Max Pain 補充
+    _pcr_data = _dd.get("pcr")
+    _mp_data = _dd.get("max_pain")
+    if _pcr_data or _mp_data:
+        _pc1, _pc2 = st.columns(2)
+        if _pcr_data:
+            _pcr_val = float(_pcr_data.get("pc_oi_ratio") or 0)
+            # 百分比轉比值
+            if _pcr_val > 5:
+                _pcr_val /= 100
+            _pc1.metric("PCR（未平倉比）", f"{_pcr_val:.3f}",
+                        help=">1.0 偏多支撐，<0.8 偏空壓力")
+        if _mp_data:
+            _mp_val = float(_mp_data.get("max_pain_strike") or 0)
+            _mp_delta = float(_mp_data.get("delta_pts") or 0)
+            _pc2.metric("Max Pain", f"{_mp_val:,.0f}",
+                        delta=f"{_mp_delta:+,.0f} vs 現價",
+                        help="使選擇權買方損失最大的理論結算價")
+
+    st.divider()
+else:
+    st.info("此日期無莊家地圖資料")
+    st.divider()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1: T字報價資金地圖
 # ═══════════════════════════════════════════════════════════════════════════════
 
