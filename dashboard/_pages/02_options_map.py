@@ -202,7 +202,7 @@ if dealer_data and dealer_data.get("strikes"):
             x=_chart_calls["strike_price"],
             y=-_chart_calls["delta_oi"],  # 負值讓它往下長，視覺上代表「壓」
             name="Sell Call 壓力（今日新增）",
-            marker_color="rgba(244,67,54,0.7)",
+            marker_color="rgba(255,82,82,0.85)",
             hovertemplate="履約價 %{x:,.0f}<br>Call ΔOI: %{customdata:,} 口<extra></extra>",
             customdata=_chart_calls["delta_oi"],
         ))
@@ -214,7 +214,7 @@ if dealer_data and dealer_data.get("strikes"):
             x=_chart_puts["strike_price"],
             y=_chart_puts["delta_oi"],  # 正值往上長，代表「撐」
             name="Sell Put 支撐（今日新增）",
-            marker_color="rgba(76,175,80,0.7)",
+            marker_color="rgba(105,240,174,0.85)",
             hovertemplate="履約價 %{x:,.0f}<br>Put ΔOI: %{customdata:,} 口<extra></extra>",
             customdata=_chart_puts["delta_oi"],
         ))
@@ -231,22 +231,26 @@ if dealer_data and dealer_data.get("strikes"):
 
     # 壓力/支撐標記線
     if _top_call_strike:
-        fig_dealer.add_vline(x=_top_call_strike, line_dash="dot", line_color="#F44336",
-                             line_width=1, annotation_text=f"壓力 {_top_call_strike:,.0f}",
+        fig_dealer.add_vline(x=_top_call_strike, line_dash="dot", line_color="#FF5252",
+                             line_width=1.5, annotation_text=f"壓力 {_top_call_strike:,.0f}",
                              annotation_position="bottom right",
-                             annotation_font_color="#F44336", annotation_font_size=10)
+                             annotation_font_color="#FF8A80", annotation_font_size=11)
     if _top_put_strike:
-        fig_dealer.add_vline(x=_top_put_strike, line_dash="dot", line_color="#4CAF50",
-                             line_width=1, annotation_text=f"支撐 {_top_put_strike:,.0f}",
+        fig_dealer.add_vline(x=_top_put_strike, line_dash="dot", line_color="#69F0AE",
+                             line_width=1.5, annotation_text=f"支撐 {_top_put_strike:,.0f}",
                              annotation_position="top left",
-                             annotation_font_color="#4CAF50", annotation_font_size=10)
+                             annotation_font_color="#69F0AE", annotation_font_size=11)
 
     fig_dealer.update_layout(
-        title="今日 OI 增減分布：紅色（Call 壓力）↓ vs 綠色（Put 支撐）↑",
-        xaxis_title="履約價", yaxis_title="ΔOI（口數）",
+        title=dict(text="今日 OI 增減分布：紅色（Call 壓力）↓ vs 綠色（Put 支撐）↑", font=dict(color="#E0E0E0")),
+        xaxis=dict(title="履約價", color="#BDBDBD", gridcolor="#424242"),
+        yaxis=dict(title="ΔOI（口數）", color="#BDBDBD", gridcolor="#424242"),
         height=420, barmode="relative",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(color="#E0E0E0")),
         hovermode="x unified",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
     )
     st.plotly_chart(fig_dealer, use_container_width=True)
 
