@@ -145,7 +145,8 @@ for art in articles:
         col_ops = None
 
     with col_art:
-        _auto_expand = (_linked_aid == art_id)
+        _has_full = f"_art_full_{art_id}" in st.session_state
+        _auto_expand = (_linked_aid == art_id) or _has_full
         with st.expander(f"**{art['title']}**　`{published}`　{author_str}", expanded=_auto_expand):
             if tags_html:
                 st.markdown(tags_html, unsafe_allow_html=True)
@@ -153,36 +154,37 @@ for art in articles:
             if summary_str:
                 st.markdown(f"> {summary_str}")
                 st.divider()
-            # 全文（需單獨取得）
-            if st.button("載入全文", key=f"_load_{art_id}"):
-                detail, err2 = _api("get", f"/articles/{art_id}")
-                if err2:
-                    st.error(f"載入失敗：{err2}")
-                else:
-                    st.session_state[f"_art_full_{art_id}"] = detail.get("content", "")
 
             full_content = st.session_state.get(f"_art_full_{art_id}")
             if full_content:
                 st.markdown(full_content)
                 st.divider()
-                # 分享按鈕
-                share_title = art["title"].replace('"', '&quot;')
                 share_url = f"https://16888u.com/%E7%A0%94%E7%A9%B6%E5%A0%B1%E5%91%8A?aid={art_id}"
-                share_text = f"{share_title} — 台指天空 SpaceTFX 研究報告"
-                st.markdown(f"""
-                <div style="display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 4px;">
-                    <a href="https://www.facebook.com/sharer/sharer.php?u={share_url}&quote={share_text}" target="_blank" rel="noopener"
-                       style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
-                              background:#1877F2;color:#fff;font-size:13px;font-weight:700;text-decoration:none;">
-                        📘 分享到 Facebook
-                    </a>
-                    <a href="javascript:void(0)" onclick="navigator.clipboard.writeText('{share_url}');this.innerText='✅ 已複製！';setTimeout(()=>this.innerText='📋 複製文章連結',2000)"
-                       style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
-                              background:#444;color:#fff;font-size:13px;font-weight:700;text-decoration:none;cursor:pointer;">
-                        📋 複製文章連結
-                    </a>
-                </div>
-                """, unsafe_allow_html=True)
+                import streamlit.components.v1 as _comp
+                _comp.html(f"""
+                <button onclick="
+                    navigator.clipboard.writeText('{share_url}').then(function(){{
+                        document.getElementById('cbtn_{art_id}').innerText='✅ 已複製！';
+                        setTimeout(function(){{ document.getElementById('cbtn_{art_id}').innerText='📋 複製文章連結'; }}, 2000);
+                    }}).catch(function(){{
+                        var t=document.createElement('textarea');t.value='{share_url}';document.body.appendChild(t);t.select();document.execCommand('copy');document.body.removeChild(t);
+                        document.getElementById('cbtn_{art_id}').innerText='✅ 已複製！';
+                        setTimeout(function(){{ document.getElementById('cbtn_{art_id}').innerText='📋 複製文章連結'; }}, 2000);
+                    }});"
+                    id="cbtn_{art_id}"
+                    style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;
+                           background:#444;color:#fff;font-size:13px;font-weight:700;border:none;cursor:pointer;">
+                    📋 複製文章連結
+                </button>
+                """, height=45)
+            else:
+                if st.button("載入全文", key=f"_load_{art_id}"):
+                    detail, err2 = _api("get", f"/articles/{art_id}")
+                    if err2:
+                        st.error(f"載入失敗：{err2}")
+                    else:
+                        st.session_state[f"_art_full_{art_id}"] = detail.get("content", "")
+                        st.rerun()
 
     if is_admin and col_ops:
         with col_ops:
