@@ -232,14 +232,15 @@ def get_seller_pnl(
         oi = float(s["open_interest"])
         cost = float(s["avg_cost"])
         cp = s["call_put"]
-        if cp == "Call":
+        is_call = cp in ("C", "Call")
+        if is_call:
             intrinsic = max(0.0, underlying - strike)
         else:
             intrinsic = max(0.0, strike - underlying)
         pnl_per_unit = cost - intrinsic
         pnl_total = pnl_per_unit * oi
         premium_total = cost * oi
-        if cp == "Call":
+        if is_call:
             total_call_premium += premium_total
             total_call_pnl += pnl_total
         else:
@@ -247,7 +248,7 @@ def get_seller_pnl(
             total_put_pnl += pnl_total
         enriched.append({
             "strike_price": strike,
-            "call_put": cp,
+            "call_put": "Call" if is_call else "Put",
             "open_interest": oi,
             "avg_cost": cost,
             "intrinsic": intrinsic,
@@ -363,3 +364,143 @@ def get_oi_structure(
         """,
         (start, end, limit),
     )
+
+
+def _third_wednesday(year: int, month: int) -> date:
+    """回傳該月第三個星期三（台指月選擇權結算日）。"""
+    first = date(year, month, 1)
+    # weekday(): Mon=0, Wed=2
+    offset = (2 - first.weekday()) % 7
+    return date(year, month, 1 + offset + 14)
+
+
+@router.get("/settlement-history")
+def get_settlement_history(
+    lookback_months: int = Query(default=12, ge=2, le=24),
+):
+    """
+    結算日 pinning 歷史分析 — 驗證「台指收斂到大倉位履約價」假說。
+
+    對過去 N 個月的第三個星期三（月結算日），回傳：
+      - underlying_close：當日台指近月期貨收盤
+      - max_pain_strike：當日 Max Pain 履約價
+      - top_call_oi_strike / top_put_oi_strike：當月到期合約最大 OI 履約價
+      - 各類距離（絕對點數 + %）
+
+    前端可用來計算 Max Pain 預測準確度、Top OI pinning 強度。
+    """
+    today = date.today()
+    # 產生最近 N 個月的第三個星期三
+    candidates: list[date] = []
+    y, m = today.year, today.month
+    for _ in range(lookback_months + 1):
+        t = _third_wednesday(y, m)
+        if t <= today:
+            candidates.append(t)
+        # 退一個月
+        if m == 1:
+            y -= 1
+            m = 12
+        else:
+            m -= 1
+    candidates.sort()
+
+    if not candidates:
+        return {"settlements": [], "summary": None}
+
+    results = []
+    for t in candidates:
+        expiring_month = f"{t.year}{t.month:02d}"  # YYYYMM，6 字元 = 月選
+
+        # 1. 當日期貨收盤（若該日非交易日，退到最近一個有資料的交易日）
+        fut = query(
+            """
+            SELECT trade_date, close_price FROM tx_futures_daily
+            WHERE trade_date <= %s AND session = '一般'
+              AND LENGTH(contract_month) = 6
+            ORDER BY trade_date DESC, contract_month ASC
+            LIMIT 1
+            """,
+            (t,),
+        )
+        if not fut or not fut[0].get("close_price"):
+            continue
+        actual_trade_date = fut[0]["trade_date"]
+        # 差距 > 5 天視為無效資料（避免日期錯位）
+        if (t - actual_trade_date).days > 5:
+            continue
+        underlying_close = float(fut[0]["close_price"])
+
+        # 2. Max Pain
+        mp = query(
+            "SELECT max_pain_strike FROM market_max_pain WHERE trade_date = %s",
+            (actual_trade_date,),
+        )
+        max_pain_strike = float(mp[0]["max_pain_strike"]) if mp and mp[0].get("max_pain_strike") else None
+
+        # 3. 到期合約的 Top OI Call / Put（只看該月合約，非週選）
+        strikes = query(
+            """
+            SELECT strike_price, call_put, open_interest
+            FROM options_strike_avg_cost
+            WHERE trade_date = %s AND contract_month = %s AND open_interest > 0
+            ORDER BY open_interest DESC
+            """,
+            (actual_trade_date, expiring_month),
+        )
+        top_call = None
+        top_put = None
+        for s in strikes:
+            cp = s["call_put"]
+            if cp in ("C", "Call") and top_call is None:
+                top_call = float(s["strike_price"])
+            elif cp in ("P", "Put") and top_put is None:
+                top_put = float(s["strike_price"])
+            if top_call is not None and top_put is not None:
+                break
+
+        def _delta(a, b):
+            if a is None or b is None:
+                return None, None
+            d = a - b
+            pct = (d / b * 100.0) if b else None
+            return d, pct
+
+        d_mp, pct_mp = _delta(underlying_close, max_pain_strike)
+        d_c, pct_c = _delta(underlying_close, top_call)
+        d_p, pct_p = _delta(underlying_close, top_put)
+
+        results.append({
+            "settlement_date": str(t),
+            "trade_date": str(actual_trade_date),
+            "expiring_month": expiring_month,
+            "underlying_close": underlying_close,
+            "max_pain_strike": max_pain_strike,
+            "top_call_oi_strike": top_call,
+            "top_put_oi_strike": top_put,
+            "delta_vs_max_pain": d_mp,
+            "delta_vs_max_pain_pct": pct_mp,
+            "delta_vs_top_call": d_c,
+            "delta_vs_top_call_pct": pct_c,
+            "delta_vs_top_put": d_p,
+            "delta_vs_top_put_pct": pct_p,
+        })
+
+    # 統計摘要
+    mp_deltas = [abs(r["delta_vs_max_pain"]) for r in results if r["delta_vs_max_pain"] is not None]
+    mp_pcts = [abs(r["delta_vs_max_pain_pct"]) for r in results if r["delta_vs_max_pain_pct"] is not None]
+    summary = None
+    if results:
+        summary = {
+            "count": len(results),
+            "avg_abs_delta_vs_max_pain": sum(mp_deltas) / len(mp_deltas) if mp_deltas else None,
+            "avg_abs_pct_vs_max_pain": sum(mp_pcts) / len(mp_pcts) if mp_pcts else None,
+            "max_abs_delta_vs_max_pain": max(mp_deltas) if mp_deltas else None,
+            "hit_within_1pct": sum(1 for p in mp_pcts if p <= 1.0),
+            "hit_within_2pct": sum(1 for p in mp_pcts if p <= 2.0),
+        }
+
+    return {
+        "settlements": results,
+        "summary": summary,
+    }

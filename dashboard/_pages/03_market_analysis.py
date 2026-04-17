@@ -729,4 +729,100 @@ if not dir_df.empty and not mp_df.empty and not ois_df.empty:
         sig_cols[i].info(f"**{title}**\n\n{detail}")
 
 st.divider()
+
+# ─── 結算日 Pinning 歷史分析 ────────────────────────────────────────────────
+st.header("🎯 結算日 Pinning 歷史分析")
+st.caption(
+    "每月第三個星期三為台指月選擇權結算日。本區驗證『台指收盤是否收斂到 Max Pain / 最大 OI 履約價』的交易假說，"
+    "提供賣方 pinning 強度的歷史證據。"
+)
+
+_sh_col1, _sh_col2 = st.columns([1, 3])
+with _sh_col1:
+    _lookback = st.selectbox("回溯月數", [6, 12, 18, 24], index=1, key="_sh_lookback")
+
+try:
+    _sh_r = requests.get(
+        f"{API_URL}/market/settlement-history",
+        params={"lookback_months": int(_lookback)},
+        timeout=15,
+    )
+    _sh_r.raise_for_status()
+    _sh = _sh_r.json()
+except Exception as e:
+    _sh = None
+    st.warning(f"無法載入結算歷史：{e}")
+
+if _sh and _sh.get("settlements"):
+    _ss = _sh["summary"] or {}
+    _rows = _sh["settlements"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("樣本數", f"{_ss.get('count', 0)} 次")
+    _avg_abs = _ss.get("avg_abs_delta_vs_max_pain")
+    c2.metric("平均偏差 |收盤 − Max Pain|", f"{_avg_abs:,.0f} 點" if _avg_abs is not None else "—")
+    _avg_pct = _ss.get("avg_abs_pct_vs_max_pain")
+    c3.metric("平均偏差 %", f"{_avg_pct:.2f}%" if _avg_pct is not None else "—")
+    _hit_2 = _ss.get("hit_within_2pct", 0)
+    _cnt = _ss.get("count", 1) or 1
+    c4.metric("命中 ±2% 比率", f"{_hit_2}/{_cnt}", f"{_hit_2/_cnt*100:.0f}%")
+
+    _sh_df = pd.DataFrame(_rows)
+    _display_cols = [
+        "settlement_date", "underlying_close", "max_pain_strike",
+        "delta_vs_max_pain", "delta_vs_max_pain_pct",
+        "top_call_oi_strike", "top_put_oi_strike",
+    ]
+    _rename = {
+        "settlement_date": "結算日",
+        "underlying_close": "台指收盤",
+        "max_pain_strike": "Max Pain",
+        "delta_vs_max_pain": "偏差點",
+        "delta_vs_max_pain_pct": "偏差 %",
+        "top_call_oi_strike": "最大 Call OI",
+        "top_put_oi_strike": "最大 Put OI",
+    }
+    _t = _sh_df[_display_cols].rename(columns=_rename).copy()
+    for col in ["台指收盤", "Max Pain", "偏差點", "最大 Call OI", "最大 Put OI"]:
+        _t[col] = _t[col].apply(lambda v: f"{v:,.0f}" if pd.notnull(v) else "—")
+    _t["偏差 %"] = _t["偏差 %"].apply(lambda v: f"{v:+.2f}%" if pd.notnull(v) else "—")
+    st.dataframe(_t, hide_index=True, use_container_width=True)
+
+    _plot_df = _sh_df.dropna(subset=["delta_vs_max_pain"]).copy()
+    if not _plot_df.empty:
+        _colors = ["rgba(102,187,106,0.85)" if d <= 0 else "rgba(239,83,80,0.85)" for d in _plot_df["delta_vs_max_pain"]]
+        _fig_sh = go.Figure()
+        _fig_sh.add_trace(go.Bar(
+            x=_plot_df["settlement_date"],
+            y=_plot_df["delta_vs_max_pain"],
+            marker=dict(color=_colors),
+            name="收盤 − Max Pain",
+            hovertemplate="%{x}<br>偏差: %{y:+,.0f} 點<extra></extra>",
+        ))
+        _fig_sh.add_hline(y=0, line_dash="dash", line_color="rgba(255,255,255,0.4)")
+        _fig_sh.update_layout(
+            title=dict(text="歷次結算偏差（正 = 收盤高於 Max Pain）", font=dict(size=14, color="#E0E0E0")),
+            xaxis=dict(title="結算日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(title="偏差（點）", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)", zerolinecolor="rgba(255,255,255,0.3)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#E0E0E0"),
+            height=340,
+            margin=dict(l=40, r=10, t=50, b=60),
+        )
+        st.plotly_chart(_fig_sh, use_container_width=True, key="settlement_history_chart")
+
+    with st.expander("📖 如何解讀此分析？"):
+        st.markdown(
+            """
+            - **Max Pain** 理論認為選擇權賣方（莊家）會把收盤推向讓買方總損失最大（即賣方總獲利最大）的履約價。
+            - **平均偏差** 愈小、**命中 ±2% 比率** 愈高，代表 pinning 現象愈強、賣方籌碼掌控力愈大。
+            - **最大 Call OI / Put OI** 是另一種 pinning 觀察指標：近月合約最多未平倉口數的履約價，往往形成結算日的磁吸或防守點。
+            - 本分析僅以歷史收盤價比對，不含結算價（結算採開盤 SQ 競價）。
+            """
+        )
+else:
+    st.info("目前樣本數不足，等更多結算日資料累積後此區會顯示分析結果。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
