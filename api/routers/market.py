@@ -366,6 +366,105 @@ def get_oi_structure(
     )
 
 
+@router.get("/night-session")
+def get_night_session(
+    trade_date: Optional[date] = Query(default=None),
+):
+    """
+    夜盤狀況 — TAIFEX 夜盤 (session='盤後') 的 TX 近月收盤、成交量、
+    與當日日盤收盤的缺口。若未指定日期則取最新有 '盤後' 資料的交易日。
+    """
+    if trade_date is None:
+        rows = query(
+            "SELECT MAX(trade_date) AS d FROM tx_futures_daily WHERE session = '盤後'"
+        )
+        trade_date = rows[0]["d"] if rows and rows[0]["d"] else date.today() - timedelta(days=1)
+
+    # 近月合約（YYYYMM，LENGTH=6、非價差）
+    day = query(
+        """
+        SELECT contract_month, open_price, high_price, low_price, close_price, volume
+        FROM tx_futures_daily
+        WHERE trade_date = %s AND contract_code = 'TX' AND session = '一般'
+          AND LENGTH(contract_month) = 6
+        ORDER BY contract_month ASC LIMIT 1
+        """,
+        (trade_date,),
+    )
+    night = query(
+        """
+        SELECT contract_month, open_price, high_price, low_price, close_price, volume
+        FROM tx_futures_daily
+        WHERE trade_date = %s AND contract_code = 'TX' AND session = '盤後'
+          AND LENGTH(contract_month) = 6
+        ORDER BY contract_month ASC LIMIT 1
+        """,
+        (trade_date,),
+    )
+
+    # 前一交易日日盤收盤（用來計算『日盤→今日夜盤』整段變化）
+    prev_day = query(
+        """
+        SELECT trade_date, close_price FROM tx_futures_daily
+        WHERE trade_date < %s AND contract_code = 'TX' AND session = '一般'
+          AND LENGTH(contract_month) = 6
+        ORDER BY trade_date DESC, contract_month ASC LIMIT 1
+        """,
+        (trade_date,),
+    )
+
+    # 夜盤選擇權成交量統計（粗略觀察夜盤活躍度）
+    opt_night = query(
+        """
+        SELECT COUNT(*) AS rows_cnt,
+               SUM(volume)::BIGINT AS total_volume,
+               SUM(CASE WHEN call_put IN ('C','Call') THEN volume ELSE 0 END)::BIGINT AS call_volume,
+               SUM(CASE WHEN call_put IN ('P','Put')  THEN volume ELSE 0 END)::BIGINT AS put_volume
+        FROM txo_options_daily
+        WHERE trade_date = %s AND session = '盤後'
+        """,
+        (trade_date,),
+    )
+
+    def _f(v):
+        return float(v) if v is not None else None
+
+    day_close = _f(day[0]["close_price"]) if day else None
+    night_close = _f(night[0]["close_price"]) if night else None
+    prev_close = _f(prev_day[0]["close_price"]) if prev_day else None
+
+    gap_day_to_night = (night_close - day_close) if (day_close is not None and night_close is not None) else None
+    gap_prev_to_night = (night_close - prev_close) if (prev_close is not None and night_close is not None) else None
+
+    return {
+        "trade_date": str(trade_date),
+        "day_session": {
+            "contract_month": day[0]["contract_month"] if day else None,
+            "open": _f(day[0]["open_price"]) if day else None,
+            "high": _f(day[0]["high_price"]) if day else None,
+            "low": _f(day[0]["low_price"]) if day else None,
+            "close": day_close,
+            "volume": int(day[0]["volume"]) if day and day[0].get("volume") is not None else None,
+        } if day else None,
+        "night_session": {
+            "contract_month": night[0]["contract_month"] if night else None,
+            "open": _f(night[0]["open_price"]) if night else None,
+            "high": _f(night[0]["high_price"]) if night else None,
+            "low": _f(night[0]["low_price"]) if night else None,
+            "close": night_close,
+            "volume": int(night[0]["volume"]) if night and night[0].get("volume") is not None else None,
+        } if night else None,
+        "prev_day_close": {
+            "trade_date": str(prev_day[0]["trade_date"]) if prev_day else None,
+            "close": prev_close,
+        } if prev_day else None,
+        "gap_day_to_night": gap_day_to_night,
+        "gap_day_to_night_pct": (gap_day_to_night / day_close * 100) if (gap_day_to_night is not None and day_close) else None,
+        "gap_prev_to_night": gap_prev_to_night,
+        "options_night_summary": opt_night[0] if opt_night else None,
+    }
+
+
 def _third_wednesday(year: int, month: int) -> date:
     """回傳該月第三個星期三（台指月選擇權結算日）。"""
     first = date(year, month, 1)
