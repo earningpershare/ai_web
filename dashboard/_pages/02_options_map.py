@@ -112,15 +112,15 @@ st.caption(
     "加權指數 (TAIEX) 盤中即時 K 線，搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
 )
 
-_tv_symbol = "TVC:TAIEX"
+_tv_symbol = "TWSE:IX0001"
 _tv_cols_sk = st.columns([2, 1, 2])
 _tv_cols_sk[0].selectbox(
     "商品",
-    ["加權指數 TAIEX"],
+    ["加權指數 IX0001"],
     index=0,
     key="_tv_symbol_select",
     disabled=True,
-    help="台指期 TXF1!/TX1! 受 TradingView 交易所授權限制無法嵌入；加權指數 TAIEX 與台指期走勢高度同步。",
+    help="台灣證交所發行量加權股價指數（IX0001），與台指期走勢高度同步。台指期 TXF1!/TX1! 受 TradingView 交易所授權限制無法嵌入。",
 )
 _tv_interval = _tv_cols_sk[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_tv_interval_select")
 _tv_cols_sk[2].markdown(
