@@ -109,19 +109,14 @@ st.sidebar.caption(f"今日: {selected_date}　前日: {prev_date}")
 
 st.header("📈 即時盤中走勢")
 st.caption(
-    "台股盤中即時 K 線（TradingView 提供，盤中自動更新）。"
-    "搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
-    "⚠️ 台指期 TXF1!/TX1! 受 TradingView 授權限制，僅能在 tradingview.com 開啟；此處改用加權指數與高相關 ETF（00631L、0050 與台指期連動性極高）。"
+    "加權指數 (TAIEX) 盤中即時 K 線，搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
+)
+st.markdown(
+    "📊 **完整台指期近月 K 線**（TXF1!、TX1! 等）受 TradingView 交易所授權限制無法嵌入，請至 "
+    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/) 查看。"
 )
 
-_tv_options = {
-    "加權指數 (TVC:TAIEX)": "TVC:TAIEX",
-    "元大台灣50正2 (00631L)": "TWSE:00631L",
-    "元大台灣50 (0050)": "TWSE:0050",
-    "台積電 (2330)": "TWSE:2330",
-}
-_tv_label = st.selectbox("標的", list(_tv_options.keys()), index=0, key="_tv_symbol_select")
-_tv_symbol = _tv_options[_tv_label]
+_tv_symbol = "TVC:TAIEX"
 _tv_interval = st.selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_tv_interval_select")
 
 import streamlit.components.v1 as _tv_components

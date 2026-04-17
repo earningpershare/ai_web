@@ -17,18 +17,14 @@ st.title("📊 市場快照")
 st.caption("三大法人期貨籌碼概覽 — 每交易日收盤後更新　🟢 免費公開")
 
 # ── 即時盤中 K 線（TradingView Widget） ─────────────────────────────────────────
-st.markdown("### 📈 即時盤中走勢")
-_tv_cols = st.columns([3, 1, 1])
-_tv_options = {
-    "加權指數 (TAIEX)": "TVC:TAIEX",
-    "元大台灣50正2 (00631L)": "TWSE:00631L",
-    "元大台灣50 (0050)": "TWSE:0050",
-    "台積電 (2330)": "TWSE:2330",
-}
-_tv_label = _tv_cols[0].selectbox("標的", list(_tv_options.keys()), index=0, key="_ov_tv_symbol")
-_tv_symbol = _tv_options[_tv_label]
-_tv_interval = _tv_cols[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_ov_tv_interval")
-_tv_cols[2].caption("⚠️ 台指期 TXF1!/TX1! 受 TradingView 授權限制，僅能在 tradingview.com 開啟；此處改用 TAIEX 與高相關 ETF。")
+st.markdown("### 📈 即時盤中走勢（加權指數 TAIEX）")
+_tv_cols = st.columns([1, 3])
+_tv_symbol = "TVC:TAIEX"
+_tv_interval = _tv_cols[0].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_ov_tv_interval")
+_tv_cols[1].markdown(
+    "📊 **完整台指期近月 K 線**（TXF1!、TX1! 等）受 TradingView 交易所授權限制無法嵌入，請至 "
+    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/) 查看。"
+)
 
 import streamlit.components.v1 as _tv_components
 _tv_html = f"""
