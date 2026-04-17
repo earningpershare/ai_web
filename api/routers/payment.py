@@ -59,7 +59,7 @@ PLANS = {
     },
     "ultimate": {
         "name": "終極版",
-        "amount": 1688,
+        "amount": 16888,
         "is_periodic": False,     # 一次買斷
     },
 }

@@ -151,7 +151,7 @@ with col_ult:
           <div style="font-size:36px">🏆</div>
           <h2 style="color:#f5a623;margin:12px 0 4px">終極版</h2>
           <div style="font-size:32px;font-weight:bold;color:#f5a623;margin:8px 0">
-            NT$1,688
+            NT$16,888
           </div>
           <div style="color:#888;font-size:13px;margin-bottom:20px">一次性買斷・永久有效</div>
           <hr style="border-color:#3d2800;margin:16px 0">
@@ -174,7 +174,7 @@ with col_ult:
         if st.button("登入後購買", key="_login_ult", use_container_width=True):
             show_login_modal()
     else:
-        st.link_button("購買終極版 — NT$1,688", _checkout_url("ultimate"),
+        st.link_button("購買終極版 — NT$16,888", _checkout_url("ultimate"),
                        use_container_width=True, type="primary")
 
 st.divider()
@@ -244,7 +244,7 @@ with st.expander("❓ 常見問題"):
         A：可以，訂閱期滿後不會自動續訂，無任何綁約。如需取消請聯繫管理員。
 
         **Q：終極版買斷是什麼意思？**
-        A：一次性支付 NT$1,688，即可永久享有終極版所有功能，無需每月繳費。
+        A：一次性支付 NT$16,888，即可永久享有終極版所有功能，無需每月繳費。
 
         **Q：終極版的「深度交流」是什麼形式？**
         A：購買後將以 Email 提供專屬聯絡方式，可與版主進行文字交流，
