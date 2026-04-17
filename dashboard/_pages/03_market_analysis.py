@@ -1764,4 +1764,92 @@ else:
     st.info("Max Pain 歷史資料不足。")
 
 st.divider()
+
+# ── OI 變動排行 top 10 ──────────────────────────────────────────────────────
+st.subheader("📊 OI 變動排行 Top 10（日變化）")
+st.caption("最新日與前一日的近月選擇權 OI 變動；找出機構積極加倉/平倉的履約價。")
+
+try:
+    _or_resp = requests.get(f"{API_URL}/market/oi-change-ranking", params={"top_n": 10, "min_oi": 200}, timeout=15)
+    _or_resp.raise_for_status()
+    _or_data = _or_resp.json()
+except Exception as e:
+    st.error(f"OI 變動 API 錯誤：{e}")
+    _or_data = {}
+
+_or_calls = (_or_data.get("calls") or {})
+_or_puts = (_or_data.get("puts") or {})
+_or_stats = (_or_data.get("stats") or {})
+
+if _or_calls and _or_puts:
+    st.caption(
+        f"資料比對：{_or_data.get('prev_date', '—')} → **{_or_data.get('latest_date', '—')}**"
+        f"  |  近月：**{_or_data.get('near_month', '—')}**"
+        f"  |  現價：**{_or_data.get('spot', 0):.0f}**"
+    )
+
+    # 總量摘要
+    oc1, oc2, oc3, oc4 = st.columns(4)
+    _call_delta = _or_stats.get("total_call_delta", 0) or 0
+    _put_delta = _or_stats.get("total_put_delta", 0) or 0
+    oc1.metric("Call 總 OI 變動", f"{_call_delta:+,}")
+    oc2.metric("Put 總 OI 變動", f"{_put_delta:+,}")
+    oc3.metric("Call 涵蓋履約價數", _or_stats.get("call_strikes", 0))
+    oc4.metric("Put 涵蓋履約價數", _or_stats.get("put_strikes", 0))
+
+    # Top 10 表格：Call 增 / Call 減 / Put 增 / Put 減（並排 2x2）
+    def _rows_to_table_rows(items, is_call):
+        out = []
+        for it in items:
+            strike = it.get("strike_price") or 0
+            mny = it.get("moneyness")
+            # 標記 ITM / OTM
+            if mny is None:
+                tag = ""
+            elif is_call:
+                tag = "🟢 OTM" if mny > 0 else "🔴 ITM"
+            else:
+                tag = "🔴 ITM" if mny > 0 else "🟢 OTM"
+            out.append({
+                "履約價": f"{strike:,.0f}",
+                "標記": tag,
+                "昨 OI": f"{it.get('prev_oi', 0):,}",
+                "今 OI": f"{it.get('latest_oi', 0):,}",
+                "Δ OI": f"{it.get('delta_oi', 0):+,}",
+                "Δ %": f"{it.get('delta_pct', 0):+.1f}%" if it.get('delta_pct') is not None else "—",
+            })
+        return out
+
+    ccol, pcol = st.columns(2)
+    with ccol:
+        st.markdown("##### 📈 Call Top 10 增加")
+        st.dataframe(_rows_to_table_rows(_or_calls.get("top_increase", []), True),
+                    use_container_width=True, hide_index=True)
+        st.markdown("##### 📉 Call Top 10 減少")
+        st.dataframe(_rows_to_table_rows(_or_calls.get("top_decrease", []), True),
+                    use_container_width=True, hide_index=True)
+    with pcol:
+        st.markdown("##### 📈 Put Top 10 增加")
+        st.dataframe(_rows_to_table_rows(_or_puts.get("top_increase", []), False),
+                    use_container_width=True, hide_index=True)
+        st.markdown("##### 📉 Put Top 10 減少")
+        st.dataframe(_rows_to_table_rows(_or_puts.get("top_decrease", []), False),
+                    use_container_width=True, hide_index=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **Call Top 增加**：大量 OI 新增集中在某履約價 → 該點位被視為潛在壓力（賣方收 Call），或大量看多買方湧入
+            - **Put Top 增加**：大量 OI 新增集中在某履約價 → 該點位被視為潛在支撐（賣方收 Put），或大量避險 Put 買盤
+            - **Top 減少**：多為平倉訊號（獲利了結或止損）
+            - **OTM/ITM 標記**：
+              - OTM Call（履約價 > 現價）或 OTM Put（履約價 < 現價）= 多為投機或賣方收權利金的位置
+              - ITM = 已有內涵價值，變動多反映部位調整
+            - **配合使用**：Call OTM 暴衝 + 隔日現價跳空上 → 空方被逼；Put OTM 暴衝 + 隔日跌破支撐 → 多方繳械。
+            """
+        )
+else:
+    st.info("OI 變動資料不足（需要至少兩日近月資料）。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

@@ -278,6 +278,126 @@ def get_seller_pnl(
     }
 
 
+@router.get("/oi-change-ranking")
+def get_oi_change_ranking(
+    top_n: int = Query(default=10, ge=5, le=30),
+    min_oi: int = Query(default=200, ge=0),
+):
+    """
+    OI 變動排行（最新日 vs 前一交易日）。
+    - 以最新 trade_date 的 near-monthly 合約為基準
+    - 同合約月份下，每個（strike, call_put）計算 OI 變動量與變動率
+    - 回傳 Call/Put 各自 Top N 增加 / Top N 減少
+    """
+    # 找最新日 + 最新日 near-month
+    latest_row = query(
+        """
+        SELECT trade_date, MIN(contract_month) AS near_month
+        FROM options_strike_avg_cost
+        WHERE LENGTH(contract_month) = 6
+          AND trade_date = (SELECT MAX(trade_date) FROM options_strike_avg_cost WHERE LENGTH(contract_month) = 6)
+        GROUP BY trade_date
+        """
+    )
+    if not latest_row:
+        return {"latest_date": None, "prev_date": None, "near_month": None, "calls": {}, "puts": {}}
+    latest_date = latest_row[0]["trade_date"]
+    near_month = latest_row[0]["near_month"]
+
+    # 找前一交易日（必須有同 near_month 的資料）
+    prev_row = query(
+        """
+        SELECT MAX(trade_date) AS d
+        FROM options_strike_avg_cost
+        WHERE contract_month = %s AND trade_date < %s
+        """,
+        (near_month, latest_date),
+    )
+    if not prev_row or not prev_row[0]["d"]:
+        return {"latest_date": str(latest_date), "prev_date": None, "near_month": near_month, "calls": {}, "puts": {}}
+    prev_date = prev_row[0]["d"]
+
+    # 期貨近月收盤（當日 spot 參考）
+    fut = query(
+        """
+        SELECT close_price::FLOAT AS close_price FROM tx_futures_daily
+        WHERE trade_date = %s AND session = '一般' AND LENGTH(contract_month) = 6
+        ORDER BY contract_month LIMIT 1
+        """,
+        (latest_date,),
+    )
+    spot = fut[0]["close_price"] if fut else None
+
+    # 兩日資料
+    rows = query(
+        """
+        SELECT trade_date, strike_price::FLOAT AS strike_price, call_put,
+               open_interest::BIGINT AS open_interest
+        FROM options_strike_avg_cost
+        WHERE contract_month = %s AND trade_date IN (%s, %s)
+          AND open_interest IS NOT NULL
+        """,
+        (near_month, latest_date, prev_date),
+    )
+
+    # 建立索引：key=(strike, call_put) → {latest_oi, prev_oi}
+    idx: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r["strike_price"], r["call_put"])
+        d = str(r["trade_date"])
+        bucket = idx.setdefault(key, {})
+        if d == str(latest_date):
+            bucket["latest_oi"] = r["open_interest"]
+        else:
+            bucket["prev_oi"] = r["open_interest"]
+
+    # 計算變動
+    deltas: list[dict] = []
+    for (strike, cp), v in idx.items():
+        curr = v.get("latest_oi") or 0
+        prev = v.get("prev_oi") or 0
+        if max(curr, prev) < min_oi:
+            continue
+        delta = curr - prev
+        delta_pct = (delta / prev * 100.0) if prev else None
+        deltas.append({
+            "strike_price": strike,
+            "call_put": "Call" if cp in ("C", "Call") else "Put",
+            "prev_oi": prev,
+            "latest_oi": curr,
+            "delta_oi": delta,
+            "delta_pct": delta_pct,
+            "moneyness": ((strike - spot) / spot * 100.0) if spot else None,  # 正=OTM Call / ITM Put
+        })
+
+    def _top(items, key, reverse):
+        return sorted(items, key=lambda x: (x[key] is None, x[key]), reverse=reverse)[:top_n]
+
+    calls = [d for d in deltas if d["call_put"] == "Call"]
+    puts = [d for d in deltas if d["call_put"] == "Put"]
+
+    return {
+        "latest_date": str(latest_date),
+        "prev_date": str(prev_date),
+        "near_month": near_month,
+        "spot": spot,
+        "calls": {
+            "top_increase": _top(calls, "delta_oi", reverse=True),
+            "top_decrease": _top(calls, "delta_oi", reverse=False),
+        },
+        "puts": {
+            "top_increase": _top(puts, "delta_oi", reverse=True),
+            "top_decrease": _top(puts, "delta_oi", reverse=False),
+        },
+        "stats": {
+            "total_call_delta": sum(d["delta_oi"] for d in calls),
+            "total_put_delta": sum(d["delta_oi"] for d in puts),
+            "call_strikes": len(calls),
+            "put_strikes": len(puts),
+        },
+    }
+
+
 @router.get("/max-pain-history")
 def get_max_pain_history(days: int = Query(default=20, ge=10, le=90)):
     """
