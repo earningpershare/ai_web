@@ -2249,4 +2249,124 @@ else:
     st.info("賣方分層壓力資料不足。")
 
 st.divider()
+
+# ── IV 波動率偏斜曲線（Smile / Skew）─────────────────────────────────────────
+st.subheader("📐 IV 波動率偏斜曲線（Smile / Skew）")
+st.caption("近月月選以 normalized premium = daily_price/spot × 100 作 IV proxy；曲線形狀即市場風險定價。")
+
+try:
+    _vs_resp = requests.get(f"{API_URL}/market/vol-skew-curve", params={"min_oi": 100, "max_moneyness": 10}, timeout=15)
+    _vs_resp.raise_for_status()
+    _vs_data = _vs_resp.json()
+except Exception as e:
+    st.error(f"IV 曲線 API 錯誤：{e}")
+    _vs_data = {}
+
+_vs_call = _vs_data.get("call_curve") or []
+_vs_put = _vs_data.get("put_curve") or []
+_vs_atm = _vs_data.get("atm") or {}
+_vs_skew = _vs_data.get("skew") or {}
+
+if _vs_call and _vs_put:
+    st.caption(
+        f"交易日：**{_vs_data.get('trade_date', '—')}**"
+        f"  |  合約月份：**{_vs_data.get('contract_month', '—')}**"
+        f"  |  現價：**{_vs_data.get('spot', 0):.0f}**"
+    )
+
+    # KPIs
+    vsk1, vsk2, vsk3, vsk4 = st.columns(4)
+    _atm_c = (_vs_atm.get("call") or {}).get("normalized_pct")
+    _atm_p = (_vs_atm.get("put") or {}).get("normalized_pct")
+    _skew_val = _vs_skew.get("skew_25d")
+    _skew_state = _vs_skew.get("state", "—")
+    _state_meta = {
+        "left_skew": ("🔻 左偏（Put 端貴）", "#EF5350", "市場擔心下跌，Put 買方願付風險溢價"),
+        "right_skew": ("🔺 右偏（Call 端貴）", "#26A69A", "追漲恐慌，Call 買方踴躍"),
+        "flat": ("⚖️ 對稱 Smile", "#FFB300", "雙邊風險定價均衡"),
+        "insufficient_band": ("— 無足夠樣本", "#888", "OTM 區段履約價太少"),
+    }
+    _slabel, _scolor, _sdesc = _state_meta.get(_skew_state, ("—", "#888", ""))
+
+    vsk1.metric("ATM Call IV proxy", f"{_atm_c:.3f}%" if _atm_c is not None else "—")
+    vsk2.metric("ATM Put IV proxy", f"{_atm_p:.3f}%" if _atm_p is not None else "—")
+    vsk3.metric("25d Skew", f"{_skew_val:+.4f}" if _skew_val is not None else "—")
+    vsk4.metric("偏斜狀態", _slabel)
+
+    # 狀態卡
+    st.markdown(
+        f"""
+        <div style="border-left:4px solid {_scolor}; background:rgba(128,128,128,0.08);
+                    padding:10px 14px; margin:8px 0; border-radius:4px;">
+          <div style="font-size:14px; color:#E0E0E0;">
+            <strong>{_slabel}</strong>
+            <span style="color:#BDBDBD;"> — {_sdesc}</span>
+          </div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:4px;">
+            OTM Put（5~10%）平均：{_vs_skew.get('otm_put_band_avg', '—')}%&nbsp;|&nbsp;
+            OTM Call（5~10%）平均：{_vs_skew.get('otm_call_band_avg', '—')}%&nbsp;|&nbsp;
+            差值（Put−Call）：{_skew_val if _skew_val is not None else '—'}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # IV skew 曲線
+    _call_x = [c["strike"] for c in _vs_call]
+    _call_y = [c["normalized_pct"] for c in _vs_call]
+    _put_x = [p["strike"] for p in _vs_put]
+    _put_y = [p["normalized_pct"] for p in _vs_put]
+    _spot = _vs_data.get("spot", 0)
+
+    _fig_sk = go.Figure()
+    _fig_sk.add_trace(
+        go.Scatter(x=_call_x, y=_call_y, name="Call 曲線",
+                   mode="lines+markers", line=dict(color="#42A5F5", width=2.5),
+                   marker=dict(size=7))
+    )
+    _fig_sk.add_trace(
+        go.Scatter(x=_put_x, y=_put_y, name="Put 曲線",
+                   mode="lines+markers", line=dict(color="#EF5350", width=2.5),
+                   marker=dict(size=7))
+    )
+    _fig_sk.add_vline(x=_spot, line_dash="dash", line_color="#FFB300", opacity=0.8,
+                      annotation_text=f"Spot {_spot:.0f}", annotation_position="top",
+                      annotation_font_color="#FFB300")
+    _fig_sk.update_layout(
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        title=dict(text="IV Proxy 曲線（normalized premium %）", font=dict(color="#E0E0E0", size=14)),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="履約價"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="normalized premium %"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    st.plotly_chart(_fig_sk, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **IV proxy 定義**：`normalized_pct = daily_price / spot × 100`。不是真正 Black-Scholes IV，但形狀與真 IV 曲線一致
+            - **曲線形狀**：
+              - **Smile（微笑）**：兩端都高、ATM 最低 → 市場對大漲/大跌都有對稱恐懼（常見於盤整或 FOMC 前）
+              - **Left Skew（左偏）**：Put 端高於 Call 端 → 下跌恐懼（買 Put 避險需求 > 買 Call 投機需求），台股歷史常態
+              - **Right Skew（右偏）**：Call 端高於 Put 端 → 追漲恐慌，罕見，通常出現在強勢突破或軋空時
+            - **25d Skew proxy**：`OTM Put 5~10% 平均 - OTM Call 5~10% 平均`
+              - \\> +0.05%pt → 明顯左偏
+              - < −0.05%pt → 明顯右偏
+              - 介於 ±0.05%pt → 對稱
+            - **搭配其他指標**：
+              - 當前（Round 18）10 日暴漲 +12.7% → 若 skew 轉為 right_skew，代表追漲情緒接近頂點
+              - 當前（Round 14）ATM IV proxy 與本指標 ATM 值可交叉驗證
+            - **限制**：normalized premium 不考慮到期日，離到期越近會越低；跨月份比較需注意
+            """
+        )
+else:
+    st.info("IV 曲線資料不足（履約價樣本過少）。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

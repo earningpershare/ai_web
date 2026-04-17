@@ -1647,6 +1647,149 @@ def get_settlement_history(
     }
 
 
+@router.get("/vol-skew-curve")
+def get_vol_skew_curve(
+    min_oi: int = Query(default=100, ge=0, le=10000),
+    max_moneyness: float = Query(default=10.0, ge=2.0, le=30.0),
+):
+    """
+    IV 波動率偏斜曲線 — 近月月選以 normalized premium (daily_price/spot ×100) 作 IV proxy。
+    - 過濾條件：open_interest >= min_oi，|moneyness%| <= max_moneyness
+    - 曲線形狀即市場風險定價：smile = 兩端都貴（對稱恐懼）、left skew = 左側 Put 端更貴（下跌恐懼）
+    - 25d skew proxy = OTM 5~10% Put 平均 - OTM 5~10% Call 平均（正值 = 下跌風險溢價）
+    """
+    latest = query("SELECT MAX(trade_date) AS d FROM options_strike_avg_cost", ())
+    if not latest or not latest[0].get("d"):
+        return {"error": "no_data"}
+    td = latest[0]["d"]
+
+    near = query(
+        """
+        SELECT contract_month, SUM(open_interest) AS tot_oi
+        FROM options_strike_avg_cost
+        WHERE trade_date = %s AND LENGTH(contract_month) = 6
+        GROUP BY contract_month
+        ORDER BY tot_oi DESC
+        LIMIT 1
+        """,
+        (td,),
+    )
+    if not near:
+        return {"error": "no_monthly"}
+    contract_month = near[0]["contract_month"]
+
+    fut = query(
+        """
+        SELECT close_price FROM tx_futures_daily
+        WHERE trade_date = %s AND session = '一般' AND contract_code = 'TX'
+          AND LENGTH(contract_month) = 6
+        ORDER BY volume DESC NULLS LAST LIMIT 1
+        """,
+        (td,),
+    )
+    if not fut or not fut[0].get("close_price"):
+        return {"error": "no_spot"}
+    spot = float(fut[0]["close_price"])
+
+    rows = query(
+        """
+        SELECT strike_price, call_put, daily_price, open_interest
+        FROM options_strike_avg_cost
+        WHERE trade_date = %s AND contract_month = %s
+          AND open_interest >= %s AND daily_price IS NOT NULL
+        ORDER BY strike_price ASC
+        """,
+        (td, contract_month, min_oi),
+    )
+    if not rows:
+        return {"error": "no_rows"}
+
+    call_curve = []
+    put_curve = []
+    for r in rows:
+        strike = float(r["strike_price"])
+        mny = (strike - spot) / spot * 100.0 if spot else 0.0
+        if abs(mny) > max_moneyness:
+            continue
+        px = float(r["daily_price"])
+        if px <= 0 or spot <= 0:
+            continue
+        norm = px / spot * 100.0  # normalized premium %
+
+        entry = {
+            "strike": strike,
+            "moneyness_pct": round(mny, 2),
+            "daily_price": px,
+            "normalized_pct": round(norm, 4),
+            "open_interest": int(r["open_interest"] or 0),
+        }
+        if r["call_put"] == "C":
+            call_curve.append(entry)
+        else:
+            put_curve.append(entry)
+
+    if not call_curve or not put_curve:
+        return {"error": "insufficient_curve"}
+
+    # ATM：最接近 spot 的 strike 的 normalized
+    def _atm(curve):
+        if not curve:
+            return None
+        return min(curve, key=lambda x: abs(x["moneyness_pct"]))
+
+    atm_call = _atm(call_curve)
+    atm_put = _atm(put_curve)
+
+    # Skew proxy：OTM 5~10% Put 均值 - OTM 5~10% Call 均值
+    otm_put_band = [c["normalized_pct"] for c in put_curve if -10 <= c["moneyness_pct"] <= -5]
+    otm_call_band = [c["normalized_pct"] for c in call_curve if 5 <= c["moneyness_pct"] <= 10]
+    otm_put_avg = sum(otm_put_band) / len(otm_put_band) if otm_put_band else None
+    otm_call_avg = sum(otm_call_band) / len(otm_call_band) if otm_call_band else None
+    skew_25d = None
+    if otm_put_avg is not None and otm_call_avg is not None:
+        skew_25d = round(otm_put_avg - otm_call_avg, 4)
+
+    if skew_25d is None:
+        skew_state = "insufficient_band"
+    elif skew_25d > 0.05:
+        skew_state = "left_skew"      # Put 端貴 → 下跌恐懼
+    elif skew_25d < -0.05:
+        skew_state = "right_skew"     # Call 端貴 → 追漲恐慌
+    else:
+        skew_state = "flat"           # 對稱 smile
+
+    # 判斷形狀：計算 call 與 put 各自最小值與端點差
+    def _shape(curve):
+        if len(curve) < 3:
+            return None
+        vals = [c["normalized_pct"] for c in curve]
+        vmin = min(vals)
+        vmax = max(vals)
+        return {"min": round(vmin, 4), "max": round(vmax, 4), "range": round(vmax - vmin, 4)}
+
+    return {
+        "trade_date": str(td),
+        "contract_month": contract_month,
+        "spot": spot,
+        "call_curve": call_curve,
+        "put_curve": put_curve,
+        "atm": {
+            "call": atm_call,
+            "put": atm_put,
+        },
+        "skew": {
+            "otm_put_band_avg": round(otm_put_avg, 4) if otm_put_avg is not None else None,
+            "otm_call_band_avg": round(otm_call_avg, 4) if otm_call_avg is not None else None,
+            "skew_25d": skew_25d,
+            "state": skew_state,
+        },
+        "shape": {
+            "call": _shape(call_curve),
+            "put": _shape(put_curve),
+        },
+    }
+
+
 @router.get("/seller-exposure-bucketed")
 def get_seller_exposure_bucketed():
     """
