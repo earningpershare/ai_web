@@ -1110,4 +1110,115 @@ else:
     st.info("大額交易人資料尚未載入或近月合約無部位。")
 
 st.divider()
+
+# ── PCR 歷史區間分位 + 警示 ───────────────────────────────────────────────────
+st.subheader("📊 PCR 歷史區間分位 — 情緒反指標")
+st.caption("Put/Call Ratio 的 180 日百分位；極端值是 contrarian 訊號（> 85 = 極度悲觀 = 看多訊號；< 15 = 極度樂觀 = 看空訊號）")
+
+try:
+    _pp_resp = requests.get(f"{API_URL}/market/pcr-percentile", params={"days": 180}, timeout=15)
+    _pp_resp.raise_for_status()
+    _pp_data = _pp_resp.json()
+except Exception as e:
+    st.error(f"PCR 百分位 API 錯誤：{e}")
+    _pp_data = {}
+
+_pp_series = _pp_data.get("series") or []
+_pp_stats = _pp_data.get("stats") or {}
+
+if _pp_series and _pp_stats:
+    _state_map = {
+        "extreme_fear": ("🟢 極度悲觀（看多訊號）", "#66BB6A"),
+        "fear": ("🟡 偏悲觀", "#FFB74D"),
+        "neutral": ("— 區間內", "#888"),
+        "greed": ("🟡 偏樂觀", "#FFB74D"),
+        "extreme_greed": ("🔴 極度樂觀（看空訊號）", "#EF5350"),
+    }
+    _oi_state = _pp_stats.get("pc_oi_state") or "neutral"
+    _vol_state = _pp_stats.get("pc_vol_state") or "neutral"
+    _oi_lbl, _oi_clr = _state_map.get(_oi_state, ("—", "#888"))
+    _vol_lbl, _vol_clr = _state_map.get(_vol_state, ("—", "#888"))
+
+    _pp_cols = st.columns(4)
+    _pp_cols[0].metric("pc_oi_ratio", f"{_pp_stats.get('latest_pc_oi', 0):.2f}",
+                       help="最新 PCR (open interest 口數基礎)")
+    _pp_cols[1].metric("180 日百分位（OI）", f"{_pp_stats.get('pc_oi_percentile', 0):.0f}%",
+                       help="當前值在 180 日分布中的百分位")
+    _pp_cols[2].metric("pc_vol_ratio", f"{_pp_stats.get('latest_pc_vol', 0):.2f}",
+                       help="最新 PCR (volume 成交量基礎)")
+    _pp_cols[3].metric("180 日百分位（Vol）", f"{_pp_stats.get('pc_vol_percentile', 0):.0f}%")
+
+    _pp_c1, _pp_c2 = st.columns(2)
+    _pp_c1.markdown(
+        f"""
+        <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:4px solid {_oi_clr}">
+          <div style="color:#888;font-size:12px">PCR (OI) 狀態</div>
+          <div style="color:{_oi_clr};font-size:15px;font-weight:600;margin:4px 0">{_oi_lbl}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    _pp_c2.markdown(
+        f"""
+        <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:4px solid {_vol_clr}">
+          <div style="color:#888;font-size:12px">PCR (Vol) 狀態</div>
+          <div style="color:{_vol_clr};font-size:15px;font-weight:600;margin:4px 0">{_vol_lbl}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    _df_pp = pd.DataFrame(_pp_series)
+    _df_pp["trade_date"] = pd.to_datetime(_df_pp["trade_date"])
+
+    _p10 = _pp_stats.get("pc_oi_p10")
+    _p50 = _pp_stats.get("pc_oi_p50")
+    _p90 = _pp_stats.get("pc_oi_p90")
+
+    _fig_pp = go.Figure()
+    _fig_pp.add_trace(go.Scatter(
+        x=_df_pp["trade_date"], y=_df_pp["pc_oi_ratio"],
+        name="pc_oi_ratio", line=dict(color="#4FC3F7", width=2),
+        hovertemplate="%{x|%Y-%m-%d}<br>PCR(OI) %{y:.2f}<extra></extra>",
+    ))
+    _fig_pp.add_trace(go.Scatter(
+        x=_df_pp["trade_date"], y=_df_pp["pc_vol_ratio"],
+        name="pc_vol_ratio", line=dict(color="#BA68C8", width=1.5, dash="dot"),
+        hovertemplate="%{x|%Y-%m-%d}<br>PCR(Vol) %{y:.2f}<extra></extra>",
+    ))
+    if _p10 is not None:
+        _fig_pp.add_hline(y=_p10, line_color="#EF5350", line_dash="dash", opacity=0.5,
+                          annotation_text=f"10% ({_p10:.0f})", annotation_position="left")
+    if _p50 is not None:
+        _fig_pp.add_hline(y=_p50, line_color="rgba(255,255,255,0.3)", line_dash="dot",
+                          annotation_text=f"中位 ({_p50:.0f})", annotation_position="left")
+    if _p90 is not None:
+        _fig_pp.add_hline(y=_p90, line_color="#66BB6A", line_dash="dash", opacity=0.5,
+                          annotation_text=f"90% ({_p90:.0f})", annotation_position="left")
+
+    _fig_pp.update_layout(
+        title=dict(text=f"180 日 PCR 時序（樣本 {_pp_stats.get('sample_days', 0)} 日）",
+                   font=dict(size=14, color="#E0E0E0")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        height=380,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.08),
+        margin=dict(l=40, r=80, t=50, b=40),
+        xaxis=dict(title="交易日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+        yaxis=dict(title="PCR", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+    )
+    st.plotly_chart(_fig_pp, use_container_width=True, key="pcr_percentile_chart")
+
+    with st.expander("📖 如何解讀 PCR 百分位？"):
+        st.markdown(
+            """
+            - **PCR (Put/Call Ratio)** 反映投資人對 Put（看空保險）vs Call（看多）的相對偏好。
+            - **反指標邏輯**：當市場極度恐慌，Put 買超多 → PCR 飆高 → 通常出現在階段性低點附近（可反向看多）；反之極度樂觀時 PCR 偏低，易見階段性高點。
+            - **OI vs Volume**：OI 反映持倉（中長期情緒），Volume 反映當日情緒（較短期）；兩者同步極端更可信。
+            - **注意**：反指標不代表隔日立刻反轉，通常領先或同步市場底/頂部數日；需配合其他訊號（背離、結算日、大戶動向）共同判斷。
+            - **資料來源**：TAIFEX 每日公布。
+            """
+        )
+else:
+    st.info("PCR 百分位資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

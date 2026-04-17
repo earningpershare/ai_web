@@ -465,6 +465,90 @@ def get_night_session(
     }
 
 
+@router.get("/pcr-percentile")
+def get_pcr_percentile(
+    days: int = Query(default=180, ge=30, le=720),
+):
+    """
+    PCR（Put/Call Ratio）歷史區間分位 + 反指標警示。
+    - 回傳近 N 日 pc_oi_ratio、pc_vol_ratio 時序
+    - 計算最新值在歷史樣本中的百分位
+    - 分位 > 85 = 極度悲觀（contrarian 看多）
+    - 分位 < 15 = 極度樂觀（contrarian 看空）
+    """
+    rows = query(
+        """
+        SELECT trade_date,
+               pc_oi_ratio::FLOAT AS pc_oi_ratio,
+               pc_vol_ratio::FLOAT AS pc_vol_ratio
+        FROM put_call_ratio
+        WHERE trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+          AND pc_oi_ratio IS NOT NULL
+        ORDER BY trade_date
+        """,
+        (days,),
+    )
+    if not rows:
+        return {"series": [], "stats": {}}
+
+    series = [{
+        "trade_date": str(r["trade_date"]),
+        "pc_oi_ratio": r["pc_oi_ratio"],
+        "pc_vol_ratio": r["pc_vol_ratio"],
+    } for r in rows]
+
+    def _percentile_rank(values: list[float], x: float) -> float:
+        if not values:
+            return 50.0
+        s = sorted(values)
+        below = sum(1 for v in s if v < x)
+        equal = sum(1 for v in s if v == x)
+        return (below + 0.5 * equal) / len(s) * 100
+
+    def _classify(p: float) -> str:
+        if p >= 85:
+            return "extreme_fear"   # 極度悲觀（contrarian 看多）
+        if p >= 70:
+            return "fear"
+        if p <= 15:
+            return "extreme_greed"  # 極度樂觀（contrarian 看空）
+        if p <= 30:
+            return "greed"
+        return "neutral"
+
+    oi_vals = [r["pc_oi_ratio"] for r in rows if r["pc_oi_ratio"] is not None]
+    vol_vals = [r["pc_vol_ratio"] for r in rows if r["pc_vol_ratio"] is not None]
+
+    latest_oi = rows[-1]["pc_oi_ratio"]
+    latest_vol = rows[-1]["pc_vol_ratio"]
+
+    oi_pct = _percentile_rank(oi_vals, latest_oi) if latest_oi is not None else None
+    vol_pct = _percentile_rank(vol_vals, latest_vol) if latest_vol is not None else None
+
+    def _band(vals: list[float], q: float) -> float:
+        if not vals:
+            return 0.0
+        s = sorted(vals)
+        idx = int(q / 100 * (len(s) - 1))
+        return s[idx]
+
+    stats = {
+        "latest_date": str(rows[-1]["trade_date"]),
+        "latest_pc_oi": latest_oi,
+        "latest_pc_vol": latest_vol,
+        "pc_oi_percentile": oi_pct,
+        "pc_vol_percentile": vol_pct,
+        "pc_oi_state": _classify(oi_pct) if oi_pct is not None else None,
+        "pc_vol_state": _classify(vol_pct) if vol_pct is not None else None,
+        "pc_oi_p10": _band(oi_vals, 10),
+        "pc_oi_p50": _band(oi_vals, 50),
+        "pc_oi_p90": _band(oi_vals, 90),
+        "sample_days": len(series),
+    }
+
+    return {"series": series, "stats": stats}
+
+
 @router.get("/large-trader-watch")
 def get_large_trader_watch(
     days: int = Query(default=7, ge=3, le=60),
