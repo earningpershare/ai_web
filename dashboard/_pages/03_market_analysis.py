@@ -1634,4 +1634,134 @@ else:
     st.info("ATM 波動率代理資料不足。")
 
 st.divider()
+
+# ── Max Pain 20 日漂移時序 ───────────────────────────────────────────────────
+st.subheader("🎯 Max Pain 20 日漂移")
+st.caption("最大痛點 vs 現價的 20 日時序。痛點吸引力（pinning）vs 趨勢脫離（breakout）觀察。")
+
+try:
+    _mh_resp = requests.get(f"{API_URL}/market/max-pain-history", params={"days": 20}, timeout=15)
+    _mh_resp.raise_for_status()
+    _mh_data = _mh_resp.json()
+except Exception as e:
+    st.error(f"Max Pain 歷史 API 錯誤：{e}")
+    _mh_data = {}
+
+_mh_series = _mh_data.get("series") or []
+_mh_summary = _mh_data.get("summary") or {}
+
+if _mh_series and _mh_summary:
+    _pressure_map = {
+        "tight_pinning": ("🧲 緊密 pinning（痛點吸力強）", "#26A69A"),
+        "above_pain_mild": ("📊 在痛點上方（溫和）", "#66BB6A"),
+        "below_pain_mild": ("📊 在痛點下方（溫和）", "#E57373"),
+        "bullish_escape": ("🚀 向上脫離痛點（多頭突破）", "#26A69A"),
+        "bearish_escape": ("🔻 向下脫離痛點（空頭突破）", "#EF5350"),
+    }
+    _trend_map2 = {
+        "converging": ("📉 距離收斂（pin 吸力增強）", "#66BB6A"),
+        "diverging": ("📈 距離發散（趨勢脫離）", "#FFA726"),
+        "stable": ("⚪ 平穩", "#9E9E9E"),
+    }
+    _plabel, _pcolor = _pressure_map.get(_mh_summary.get("pressure"), ("—", "#9E9E9E"))
+    _tlabel2, _tcolor2 = _trend_map2.get(_mh_summary.get("trend"), ("—", "#9E9E9E"))
+
+    mc1, mc2, mc3, mc4 = st.columns(4)
+    _latest_mp = _mh_summary.get("latest_max_pain", 0) or 0
+    _latest_und = _mh_summary.get("latest_underlying", 0) or 0
+    _latest_dp = _mh_summary.get("latest_delta_pts", 0) or 0
+    _latest_dpct = _mh_summary.get("latest_delta_pct", 0) or 0
+    _avg_abs = _mh_summary.get("avg_abs_delta_pts", 0) or 0
+    mc1.metric("最新 Max Pain", f"{_latest_mp:,.0f}")
+    mc2.metric("最新現價", f"{_latest_und:,.0f}")
+    mc3.metric("Delta（現價−痛點）", f"{_latest_dp:+,.0f}", delta=f"{_latest_dpct:+.2f}%")
+    mc4.metric("20 日平均 |Delta|", f"{_avg_abs:,.0f}")
+
+    # 兩張狀態卡並排
+    sc1, sc2 = st.columns(2)
+    with sc1:
+        st.markdown(
+            f"""
+            <div style="padding:14px; border-radius:8px; border-left:5px solid {_pcolor}; background:rgba(255,255,255,0.03);">
+              <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">當前壓力結構</div>
+              <div style="font-size:15px; color:{_pcolor}; font-weight:600;">{_plabel}</div>
+              <div style="font-size:12px; color:#BDBDBD; margin-top:6px;">
+                20 日：上方 {_mh_summary.get('days_above_pain', 0)} 日 / 下方 {_mh_summary.get('days_below_pain', 0)} 日
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with sc2:
+        st.markdown(
+            f"""
+            <div style="padding:14px; border-radius:8px; border-left:5px solid {_tcolor2}; background:rgba(255,255,255,0.03);">
+              <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">20 日漂移趨勢</div>
+              <div style="font-size:15px; color:{_tcolor2}; font-weight:600;">{_tlabel2}</div>
+              <div style="font-size:12px; color:#BDBDBD; margin-top:6px;">
+                比較前半段 vs 後半段的 |Delta| 平均值
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # 時序圖：Max Pain + Underlying 雙線 + delta 柱
+    from plotly.subplots import make_subplots
+    _fig_mp = make_subplots(specs=[[{"secondary_y": True}]])
+    _mp_dates = [s["trade_date"] for s in _mh_series]
+    _mp_vals = [s["max_pain"] for s in _mh_series]
+    _und_vals = [s["underlying"] for s in _mh_series]
+    _deltas = [s["delta_pts"] for s in _mh_series]
+    _bar_colors2 = ["#26A69A" if d >= 0 else "#EF5350" for d in _deltas]
+    _fig_mp.add_trace(
+        go.Bar(x=_mp_dates, y=_deltas, name="Delta（現價−痛點）",
+               marker_color=_bar_colors2, opacity=0.55),
+        secondary_y=False,
+    )
+    _fig_mp.add_trace(
+        go.Scatter(x=_mp_dates, y=_und_vals, name="期貨近月收盤",
+                   mode="lines+markers", line=dict(color="#FFB300", width=2.5),
+                   marker=dict(size=7)),
+        secondary_y=True,
+    )
+    _fig_mp.add_trace(
+        go.Scatter(x=_mp_dates, y=_mp_vals, name="Max Pain 履約價",
+                   mode="lines+markers", line=dict(color="#AB47BC", width=2, dash="dash"),
+                   marker=dict(size=6)),
+        secondary_y=True,
+    )
+    _fig_mp.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.7, secondary_y=False)
+    _fig_mp.update_layout(
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    _fig_mp.update_yaxes(title_text="Delta（點）", gridcolor="rgba(128,128,128,0.2)", secondary_y=False)
+    _fig_mp.update_yaxes(title_text="價格", gridcolor="rgba(128,128,128,0.15)", secondary_y=True)
+    st.plotly_chart(_fig_mp, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **Max Pain 理論**：期貨結算時，最讓選擇權買方痛苦（賣方獲利）的履約價。公式：`argmin_K Σ max(K−S, 0)·put_OI(S) + Σ max(S−K, 0)·call_OI(S)`。
+            - **壓力方向**：
+              - 現價 > Max Pain（Delta > 0）→ Call 賣方帳面壓力大，市場可能被拉回
+              - 現價 < Max Pain（Delta < 0）→ Put 賣方帳面壓力大，市場可能被拉抬
+            - **漂移解讀**：
+              - `converging`（距離收斂）= pin 吸力加強，越接近結算日越明顯，常見橫盤
+              - `diverging`（距離發散）= 趨勢行情壓過 pin 吸力，突破/下殺可能性提高
+            - **交易意涵**：結算週 Max Pain 常是短線支撐/壓力；遠離結算日時 Max Pain 僅供參考。
+            - **與其他指標搭配**：Delta 發散 + Round 14 波動率擴張 = 趨勢發動 / Delta 收斂 + 波動率壓縮 = 盤整延續。
+            """
+        )
+else:
+    st.info("Max Pain 歷史資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

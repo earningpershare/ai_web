@@ -278,6 +278,100 @@ def get_seller_pnl(
     }
 
 
+@router.get("/max-pain-history")
+def get_max_pain_history(days: int = Query(default=20, ge=10, le=90)):
+    """
+    Max Pain N 日漂移時序（讀取 market_max_pain 表，pipeline 已預計算）。
+    - delta_pts = underlying - max_pain_strike（正：價格在痛點上方 / 負：下方）
+    - pressure 分類：bullish_escape / pinning / bearish_escape
+    - trend：underlying 與 max_pain 的距離是收斂（pinning）還是發散（breakout）
+    """
+    rows = query(
+        """
+        SELECT trade_date,
+               max_pain_strike::FLOAT AS max_pain,
+               underlying_price::FLOAT AS underlying,
+               delta_pts::FLOAT AS delta_pts
+        FROM market_max_pain
+        WHERE trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+          AND max_pain_strike IS NOT NULL
+          AND underlying_price IS NOT NULL
+        ORDER BY trade_date
+        """,
+        (days * 2,),
+    )
+
+    series: list[dict] = []
+    for r in rows:
+        mp = r["max_pain"]
+        und = r["underlying"]
+        delta = r["delta_pts"]
+        delta_pct = (delta / und * 100.0) if (delta is not None and und) else None
+        series.append({
+            "trade_date": str(r["trade_date"]),
+            "max_pain": mp,
+            "underlying": und,
+            "delta_pts": delta,
+            "delta_pct": delta_pct,
+        })
+    series = series[-days:]
+
+    summary: dict = {}
+    if len(series) >= 5:
+        deltas = [s["delta_pts"] for s in series if s["delta_pts"] is not None]
+        delta_pcts = [s["delta_pct"] for s in series if s["delta_pct"] is not None]
+        abs_deltas = [abs(d) for d in deltas]
+        pos = sum(1 for d in deltas if d > 0)
+        neg = sum(1 for d in deltas if d < 0)
+        avg_delta = sum(deltas) / len(deltas) if deltas else 0.0
+        avg_abs_delta = sum(abs_deltas) / len(abs_deltas) if abs_deltas else 0.0
+
+        latest = series[-1]
+        latest_abs_pct = abs(latest["delta_pct"] or 0)
+
+        # 當前壓力分類
+        if latest_abs_pct < 0.5:
+            pressure = "tight_pinning"  # 痛點拉力強
+        elif (latest["delta_pct"] or 0) >= 1.5:
+            pressure = "bullish_escape"  # 價格脫離痛點上行
+        elif (latest["delta_pct"] or 0) <= -1.5:
+            pressure = "bearish_escape"  # 價格脫離痛點下行
+        elif (latest["delta_pct"] or 0) > 0:
+            pressure = "above_pain_mild"
+        else:
+            pressure = "below_pain_mild"
+
+        # 趨勢：比較前半段 vs 後半段的 |delta|
+        mid = len(abs_deltas) // 2
+        if mid >= 2:
+            first_half_avg = sum(abs_deltas[:mid]) / mid
+            last_half_avg = sum(abs_deltas[mid:]) / (len(abs_deltas) - mid)
+            if last_half_avg < first_half_avg * 0.7:
+                trend = "converging"  # Pin 吸力增強
+            elif last_half_avg > first_half_avg * 1.3:
+                trend = "diverging"   # 趨勢脫離
+            else:
+                trend = "stable"
+        else:
+            trend = "stable"
+
+        summary = {
+            "latest_date": latest["trade_date"],
+            "latest_max_pain": latest["max_pain"],
+            "latest_underlying": latest["underlying"],
+            "latest_delta_pts": latest["delta_pts"],
+            "latest_delta_pct": latest["delta_pct"],
+            "days_above_pain": pos,
+            "days_below_pain": neg,
+            "avg_delta_pts": avg_delta,
+            "avg_abs_delta_pts": avg_abs_delta,
+            "pressure": pressure,
+            "trend": trend,
+        }
+
+    return {"series": series, "summary": summary, "sample_days": len(series)}
+
+
 @router.get("/atm-vol-proxy")
 def get_atm_vol_proxy(days: int = Query(default=20, ge=10, le=90)):
     """
