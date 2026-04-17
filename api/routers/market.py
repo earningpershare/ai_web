@@ -1647,6 +1647,124 @@ def get_settlement_history(
     }
 
 
+@router.get("/futures-oi-momentum")
+def get_futures_oi_momentum(
+    days: int = Query(default=10, ge=5, le=30),
+):
+    """
+    期貨未平倉動能 — 過去 N 個交易日總 TX OI + 近月收盤；四象限動能分類。
+    - 漲+OI擴 = 多方建倉（bull_build）、漲+OI縮 = 空頭回補（bear_cover）
+    - 跌+OI擴 = 空方建倉（bear_build）、跌+OI縮 = 多頭認賠（bull_cover）
+    """
+    rows = query(
+        """
+        WITH daily AS (
+          SELECT
+            trade_date,
+            SUM(open_interest) AS total_oi
+          FROM tx_futures_daily
+          WHERE session = '一般' AND contract_code = 'TX'
+          GROUP BY trade_date
+        ),
+        near_month AS (
+          SELECT DISTINCT ON (trade_date)
+            trade_date, close_price, volume
+          FROM tx_futures_daily
+          WHERE session = '一般' AND contract_code = 'TX'
+            AND LENGTH(contract_month) = 6
+          ORDER BY trade_date, volume DESC NULLS LAST
+        )
+        SELECT d.trade_date, d.total_oi, n.close_price
+        FROM daily d
+        JOIN near_month n USING (trade_date)
+        ORDER BY d.trade_date DESC
+        LIMIT %s
+        """,
+        (days,),
+    )
+    if not rows or len(rows) < 2:
+        return {"series": [], "stats": None, "error": "no_data"}
+
+    rows_asc = sorted(rows, key=lambda r: r["trade_date"])  # ASC
+
+    series = []
+    prev_oi = None
+    prev_price = None
+    for r in rows_asc:
+        td = r["trade_date"]
+        oi = int(r["total_oi"]) if r["total_oi"] is not None else None
+        px = float(r["close_price"]) if r["close_price"] is not None else None
+        if oi is None or px is None:
+            continue
+
+        oi_delta = None
+        px_delta = None
+        state = None
+        if prev_oi is not None and prev_price is not None:
+            oi_delta = oi - prev_oi
+            px_delta = round(px - prev_price, 2)
+            if px_delta >= 0 and oi_delta >= 0:
+                state = "bull_build"        # 漲 + OI 擴張：多方建倉
+            elif px_delta >= 0 and oi_delta < 0:
+                state = "bear_cover"        # 漲 + OI 收縮：空頭回補
+            elif px_delta < 0 and oi_delta >= 0:
+                state = "bear_build"        # 跌 + OI 擴張：空方建倉
+            else:
+                state = "bull_cover"        # 跌 + OI 收縮：多頭認賠
+
+        series.append({
+            "trade_date": str(td),
+            "total_oi": oi,
+            "close_price": px,
+            "oi_delta": oi_delta,
+            "px_delta": px_delta,
+            "state": state,
+        })
+        prev_oi, prev_price = oi, px
+
+    if len(series) < 2:
+        return {"series": [], "stats": None, "error": "insufficient_days"}
+
+    # 累積變化（從首日到末日）
+    first = series[0]
+    last = series[-1]
+    cum_oi_delta = last["total_oi"] - first["total_oi"]
+    cum_oi_pct = round(cum_oi_delta / first["total_oi"] * 100.0, 2) if first["total_oi"] else 0.0
+    cum_px_delta = round(last["close_price"] - first["close_price"], 2)
+    cum_px_pct = round(cum_px_delta / first["close_price"] * 100.0, 2) if first["close_price"] else 0.0
+
+    # 累積動能狀態
+    if cum_px_pct >= 0 and cum_oi_pct >= 0:
+        cum_state = "bull_build"
+    elif cum_px_pct >= 0 and cum_oi_pct < 0:
+        cum_state = "bear_cover"
+    elif cum_px_pct < 0 and cum_oi_pct >= 0:
+        cum_state = "bear_build"
+    else:
+        cum_state = "bull_cover"
+
+    # 單日狀態分布
+    state_counts: dict[str, int] = {}
+    for s in series[1:]:
+        k = s.get("state")
+        if k:
+            state_counts[k] = state_counts.get(k, 0) + 1
+
+    return {
+        "series": series,
+        "stats": {
+            "days_covered": len(series),
+            "cum_oi_delta": cum_oi_delta,
+            "cum_oi_pct": cum_oi_pct,
+            "cum_px_delta": cum_px_delta,
+            "cum_px_pct": cum_px_pct,
+            "cum_state": cum_state,
+            "state_counts": state_counts,
+            "latest_state": last.get("state"),
+        },
+    }
+
+
 @router.get("/volume-concentration")
 def get_volume_concentration(
     days: int = Query(default=10, ge=5, le=30),

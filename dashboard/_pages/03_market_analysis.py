@@ -1968,4 +1968,141 @@ else:
     st.info("成交量集中度資料不足。")
 
 st.divider()
+
+# ── 期貨未平倉動能（OI + 價格 四象限）────────────────────────────────────────
+st.subheader("🚀 期貨未平倉動能（四象限）")
+st.caption("TX 期貨總 OI 與近月收盤的 10 日時序；四象限判讀多空建倉/回補。")
+
+try:
+    _om_resp = requests.get(f"{API_URL}/market/futures-oi-momentum", params={"days": 10}, timeout=15)
+    _om_resp.raise_for_status()
+    _om_data = _om_resp.json()
+except Exception as e:
+    st.error(f"OI 動能 API 錯誤：{e}")
+    _om_data = {}
+
+_om_series = _om_data.get("series") or []
+_om_stats = _om_data.get("stats") or {}
+
+if _om_series and _om_stats:
+    _state_meta = {
+        "bull_build": ("🟢 多方建倉", "#26A69A", "漲 + OI 擴張：新多單進場，趨勢健康"),
+        "bear_cover": ("🟡 空頭回補", "#FFB300", "漲 + OI 收縮：空單認輸平倉，上漲動能偏弱"),
+        "bear_build": ("🔴 空方建倉", "#EF5350", "跌 + OI 擴張：新空單進場，下跌有續航力"),
+        "bull_cover": ("🔵 多頭認賠", "#42A5F5", "跌 + OI 收縮：多單停損離場，下跌動能偏弱"),
+    }
+    _cum_state = _om_stats.get("cum_state", "")
+    _cum_label, _cum_color, _cum_desc = _state_meta.get(_cum_state, ("—", "#888", ""))
+    _latest_state = _om_stats.get("latest_state", "")
+    _lat_label, _lat_color, _lat_desc = _state_meta.get(_latest_state, ("—", "#888", ""))
+
+    # KPIs
+    om1, om2, om3, om4 = st.columns(4)
+    _cum_oi = _om_stats.get("cum_oi_delta", 0) or 0
+    _cum_oi_pct = _om_stats.get("cum_oi_pct", 0) or 0
+    _cum_px = _om_stats.get("cum_px_delta", 0) or 0
+    _cum_px_pct = _om_stats.get("cum_px_pct", 0) or 0
+    om1.metric(f"{_om_stats.get('days_covered', 0)} 日累積 OI", f"{_cum_oi:+,}", f"{_cum_oi_pct:+.2f}%")
+    om2.metric("累積價格", f"{_cum_px:+.0f} 點", f"{_cum_px_pct:+.2f}%")
+    om3.metric("累積動能狀態", _cum_label)
+    om4.metric("昨日單日狀態", _lat_label)
+
+    # 狀態卡（以累積動能為主）
+    st.markdown(
+        f"""
+        <div style="border-left:4px solid {_cum_color}; background:rgba(128,128,128,0.08);
+                    padding:10px 14px; margin:8px 0; border-radius:4px;">
+          <div style="font-size:14px; color:#E0E0E0;">
+            <strong>累積動能：{_cum_label}</strong>
+            <span style="color:#BDBDBD;"> — {_cum_desc}</span>
+          </div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:4px;">
+            昨日單日：{_lat_label} — {_lat_desc}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 雙 y 軸：OI 柱 + 價格線
+    from plotly.subplots import make_subplots
+    _fig_om = make_subplots(specs=[[{"secondary_y": True}]])
+    _om_dates = [s["trade_date"] for s in _om_series]
+    _om_oi = [s["total_oi"] for s in _om_series]
+    _om_px = [s["close_price"] for s in _om_series]
+    _om_oi_delta = [s.get("oi_delta") or 0 for s in _om_series]
+    _bar_colors = ["#26A69A" if d >= 0 else "#EF5350" for d in _om_oi_delta]
+    _fig_om.add_trace(
+        go.Bar(x=_om_dates, y=_om_oi_delta, name="OI 日變化",
+               marker_color=_bar_colors, opacity=0.55),
+        secondary_y=False,
+    )
+    _fig_om.add_trace(
+        go.Scatter(x=_om_dates, y=_om_px, name="近月收盤",
+                   mode="lines+markers", line=dict(color="#FFB300", width=2.5),
+                   marker=dict(size=7)),
+        secondary_y=True,
+    )
+    _fig_om.add_trace(
+        go.Scatter(x=_om_dates, y=_om_oi, name="總 OI",
+                   mode="lines+markers", line=dict(color="#AB47BC", width=2, dash="dot"),
+                   marker=dict(size=6)),
+        secondary_y=False,
+    )
+    _fig_om.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.5, secondary_y=False)
+    _fig_om.update_layout(
+        height=360,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    _fig_om.update_yaxes(title_text="OI（口）", gridcolor="rgba(128,128,128,0.2)", secondary_y=False)
+    _fig_om.update_yaxes(title_text="價格", gridcolor="rgba(128,128,128,0.15)", secondary_y=True)
+    st.plotly_chart(_fig_om, use_container_width=True)
+
+    # 單日狀態分布 (stacked bar 或 pill)
+    _sc = _om_stats.get("state_counts") or {}
+    if _sc:
+        pills_html = ""
+        for key in ("bull_build", "bear_cover", "bear_build", "bull_cover"):
+            lbl, col, _ = _state_meta[key]
+            cnt = _sc.get(key, 0)
+            pills_html += (
+                f'<span style="display:inline-block; margin:4px 6px 0 0; padding:4px 10px; '
+                f'border-radius:12px; background:rgba(128,128,128,0.12); '
+                f'border:1px solid {col}; color:{col}; font-size:13px;">'
+                f'{lbl} × {cnt}</span>'
+            )
+        st.markdown(f"<div style='margin:6px 0;'>過去 {len(_om_series)-1} 個變化日的狀態分布：{pills_html}</div>", unsafe_allow_html=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **四象限判讀**（經典期貨動能分析）：
+
+              | 象限 | 價格 | OI | 解讀 |
+              |------|------|------|------|
+              | 🟢 多方建倉 | 漲 | 擴張 | 新多單進場，趨勢確認 |
+              | 🔴 空方建倉 | 跌 | 擴張 | 新空單進場，下跌有續航 |
+              | 🟡 空頭回補 | 漲 | 收縮 | 空單止損，上漲動能弱 |
+              | 🔵 多頭認賠 | 跌 | 收縮 | 多單認輸，下跌動能弱 |
+
+            - **累積 vs 單日**：累積看整段趨勢性質（建倉 or 解散）；單日看最新一天的邊際變化
+            - **警訊組合**：
+              - 連續多日「空方建倉」+ 跌破前低 → 下跌趨勢加速
+              - 「多方建倉」→「空頭回補」轉換 → 上漲進入尾聲（缺新多單）
+              - 「空方建倉」→「多頭認賠」轉換 → 下跌進入尾聲（缺新空單）
+            - **與其他指標搭配**：
+              - 累積多方建倉 + Round 11 外資期貨淨多單擴張 = 強趨勢
+              - 單日空頭回補 + Round 14 波動率壓縮 = 行情可能轉橫盤
+            """
+        )
+else:
+    st.info("期貨 OI 動能資料不足（需要至少 2 日）。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
