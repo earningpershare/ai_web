@@ -109,14 +109,16 @@ st.sidebar.caption(f"今日: {selected_date}　前日: {prev_date}")
 
 st.header("📈 即時盤中走勢")
 st.caption(
-    "台指期近月即時 K 線（TradingView 提供，盤中自動更新）。"
+    "台股盤中即時 K 線（TradingView 提供，盤中自動更新）。"
     "搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
+    "⚠️ 台指期 TXF1!/TX1! 受 TradingView 授權限制，僅能在 tradingview.com 開啟；此處改用加權指數與高相關 ETF（00631L、0050 與台指期連動性極高）。"
 )
 
 _tv_options = {
-    "台指期近月 (TAIFEX:TXF1!)": "TAIFEX:TXF1!",
     "加權指數 (TVC:TAIEX)": "TVC:TAIEX",
-    "台指期主連 (TAIFEX:TX1!)": "TAIFEX:TX1!",
+    "元大台灣50正2 (00631L)": "TWSE:00631L",
+    "元大台灣50 (0050)": "TWSE:0050",
+    "台積電 (2330)": "TWSE:2330",
 }
 _tv_label = st.selectbox("標的", list(_tv_options.keys()), index=0, key="_tv_symbol_select")
 _tv_symbol = _tv_options[_tv_label]
