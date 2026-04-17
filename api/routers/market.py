@@ -180,6 +180,103 @@ def get_dealer_map(
     }
 
 
+@router.get("/seller-pnl")
+def get_seller_pnl(
+    trade_date: Optional[date] = Query(default=None),
+    min_oi: int = Query(default=500, ge=100, description="只計算 OI 大於此值的履約價"),
+):
+    """
+    賣方盈虧儀表板 — 以當前現價結算，估算賣方的未實現 P&L。
+
+    公式（每口）：
+      Call 賣方 P&L = avg_cost − max(0, 現價 − 履約價)
+      Put  賣方 P&L = avg_cost − max(0, 履約價 − 現價)
+
+    正數 = 賣方帳面賺、負數 = 帳面虧。
+    """
+    if trade_date is None:
+        rows = query("SELECT MAX(trade_date) AS d FROM options_strike_avg_cost")
+        trade_date = rows[0]["d"] if rows and rows[0]["d"] else date.today() - timedelta(days=1)
+
+    # 期貨近月收盤（作為現價）
+    fut = query(
+        """
+        SELECT close_price FROM tx_futures_daily
+        WHERE trade_date = %s AND session = '一般'
+          AND LENGTH(contract_month) = 6
+        ORDER BY contract_month LIMIT 1
+        """,
+        (trade_date,),
+    )
+    underlying = float(fut[0]["close_price"]) if fut and fut[0].get("close_price") else None
+    if underlying is None:
+        return {"trade_date": str(trade_date), "underlying": None, "strikes": [], "summary": None}
+
+    strikes = query(
+        """
+        SELECT strike_price, call_put, open_interest, avg_cost, contract_month
+        FROM options_strike_avg_cost
+        WHERE trade_date = %s AND open_interest >= %s AND avg_cost IS NOT NULL
+        """,
+        (trade_date, min_oi),
+    )
+
+    # 計算每履約價 P&L
+    enriched = []
+    total_call_premium = 0.0  # 賣方收取權利金總額（口）
+    total_put_premium = 0.0
+    total_call_pnl = 0.0      # 賣方未實現 P&L 總額（口）
+    total_put_pnl = 0.0
+    for s in strikes:
+        strike = float(s["strike_price"])
+        oi = float(s["open_interest"])
+        cost = float(s["avg_cost"])
+        cp = s["call_put"]
+        if cp == "Call":
+            intrinsic = max(0.0, underlying - strike)
+        else:
+            intrinsic = max(0.0, strike - underlying)
+        pnl_per_unit = cost - intrinsic
+        pnl_total = pnl_per_unit * oi
+        premium_total = cost * oi
+        if cp == "Call":
+            total_call_premium += premium_total
+            total_call_pnl += pnl_total
+        else:
+            total_put_premium += premium_total
+            total_put_pnl += pnl_total
+        enriched.append({
+            "strike_price": strike,
+            "call_put": cp,
+            "open_interest": oi,
+            "avg_cost": cost,
+            "intrinsic": intrinsic,
+            "pnl_per_unit": pnl_per_unit,
+            "pnl_total": pnl_total,
+            "premium_total": premium_total,
+            "contract_month": s.get("contract_month"),
+        })
+
+    # 排序：按 |pnl_total| 降冪，前端取 top N
+    enriched.sort(key=lambda x: abs(x["pnl_total"]), reverse=True)
+
+    return {
+        "trade_date": str(trade_date),
+        "underlying": underlying,
+        "summary": {
+            "total_call_premium": total_call_premium,
+            "total_put_premium": total_put_premium,
+            "total_premium": total_call_premium + total_put_premium,
+            "total_call_pnl": total_call_pnl,
+            "total_put_pnl": total_put_pnl,
+            "total_pnl": total_call_pnl + total_put_pnl,
+            "call_strike_count": sum(1 for s in enriched if s["call_put"] == "Call"),
+            "put_strike_count": sum(1 for s in enriched if s["call_put"] == "Put"),
+        },
+        "strikes": enriched,
+    }
+
+
 @router.get("/dealer-map-history")
 def get_dealer_map_history(
     days: int = Query(default=5, ge=2, le=20),

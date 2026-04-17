@@ -498,6 +498,171 @@ st.divider()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 0.6: 賣方盈虧儀表板 (Seller P&L Tracker)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+st.header("💰 賣方盈虧儀表板 — 以當前現價結算")
+st.caption(
+    "把賣方當主力，計算『若此刻結算，賣方的帳面盈虧』。"
+    "綠色 = 賣方賺、紅色 = 賣方虧。連續惡化但 OI 未減 → 主力死扛，變盤壓力上升。"
+)
+
+try:
+    _pnl_r = requests.get(
+        f"{API_URL}/market/seller-pnl",
+        params={"trade_date": str(selected_date)},
+        timeout=15,
+    )
+    _pnl_r.raise_for_status()
+    pnl_data = _pnl_r.json()
+except Exception as e:
+    pnl_data = None
+    st.warning(f"無法載入賣方盈虧資料：{e}")
+
+if pnl_data and pnl_data.get("summary"):
+    _sm = pnl_data["summary"]
+    _underlying_now = pnl_data.get("underlying")
+
+    # ── KPI 卡片 ────────────────────────────────────────────────────
+    kc1, kc2, kc3, kc4 = st.columns(4)
+
+    def _fmt_big(n):
+        """把點數 × 口數 轉成『億』單位顯示（台指每點 50 元，選擇權乘數視合約而定；
+        這裡以『點數*口數』當相對量比較即可，不做貨幣換算）。"""
+        if abs(n) >= 1e6:
+            return f"{n/1e6:+,.2f} M"
+        if abs(n) >= 1e3:
+            return f"{n/1e3:+,.1f} K"
+        return f"{n:+,.0f}"
+
+    with kc1:
+        st.metric(
+            "📈 Call 賣方收入",
+            _fmt_big(_sm["total_call_premium"]),
+            help="所有 Call 賣方今日實收權利金總量（點數×口數）",
+        )
+    with kc2:
+        st.metric(
+            "📉 Put 賣方收入",
+            _fmt_big(_sm["total_put_premium"]),
+            help="所有 Put 賣方今日實收權利金總量（點數×口數）",
+        )
+    with kc3:
+        delta_c = _sm["total_call_pnl"]
+        st.metric(
+            "Call 賣方未實現 P&L",
+            _fmt_big(delta_c),
+            delta=("賺" if delta_c > 0 else "虧"),
+            delta_color=("normal" if delta_c > 0 else "inverse"),
+        )
+    with kc4:
+        delta_p = _sm["total_put_pnl"]
+        st.metric(
+            "Put 賣方未實現 P&L",
+            _fmt_big(delta_p),
+            delta=("賺" if delta_p > 0 else "虧"),
+            delta_color=("normal" if delta_p > 0 else "inverse"),
+        )
+
+    # 總盈虧橫幅
+    total_pnl = _sm["total_pnl"]
+    if total_pnl >= 0:
+        _banner_bg = "linear-gradient(135deg,#1B5E20,#2E7D32)"
+        _banner_tag = "賣方整體帳面賺"
+    else:
+        _banner_bg = "linear-gradient(135deg,#B71C1C,#C62828)"
+        _banner_tag = "賣方整體帳面虧"
+    st.markdown(
+        f"""
+        <div style="background:{_banner_bg};color:#fff;padding:14px 20px;
+                    border-radius:8px;margin:12px 0;display:flex;
+                    justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:13px;opacity:.8">賣方整體未實現 P&amp;L（現價 {_underlying_now:,.0f}）</div>
+            <div style="font-size:22px;font-weight:bold;margin-top:2px">
+              {_fmt_big(total_pnl)}　<span style="font-size:14px;opacity:.85">({_banner_tag})</span>
+            </div>
+          </div>
+          <div style="font-size:12px;opacity:.8;text-align:right">
+            Call 參與履約價 {_sm['call_strike_count']}<br>
+            Put  參與履約價 {_sm['put_strike_count']}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Top 盈虧履約價對比圖 ───────────────────────────────────────
+    import pandas as pd_local
+    pnl_df = pd_local.DataFrame(pnl_data["strikes"])
+    if not pnl_df.empty:
+        # 分別取賣方最賺 / 最虧 各 Top 10
+        winners = pnl_df[pnl_df["pnl_total"] > 0].nlargest(10, "pnl_total")
+        losers  = pnl_df[pnl_df["pnl_total"] < 0].nsmallest(10, "pnl_total")
+
+        def _label(row):
+            return f"{row['call_put'][0]}{int(row['strike_price']):,}"
+
+        fig_pnl = go.Figure()
+        if not winners.empty:
+            fig_pnl.add_trace(go.Bar(
+                x=winners.apply(_label, axis=1),
+                y=winners["pnl_total"],
+                marker=dict(color="rgba(102,187,106,0.85)", line=dict(color="#2E7D32", width=1)),
+                name="賣方帳面賺 Top 10",
+                hovertemplate=(
+                    "%{x}<br>P&L 總量: %{y:,.0f}<br>"
+                    "每口 P&L: %{customdata[0]:,.2f}<br>"
+                    "OI: %{customdata[1]:,.0f}<extra></extra>"
+                ),
+                customdata=winners[["pnl_per_unit", "open_interest"]].values,
+            ))
+        if not losers.empty:
+            fig_pnl.add_trace(go.Bar(
+                x=losers.apply(_label, axis=1),
+                y=losers["pnl_total"],
+                marker=dict(color="rgba(239,83,80,0.85)", line=dict(color="#B71C1C", width=1)),
+                name="賣方帳面虧 Top 10",
+                hovertemplate=(
+                    "%{x}<br>P&L 總量: %{y:,.0f}<br>"
+                    "每口 P&L: %{customdata[0]:,.2f}<br>"
+                    "OI: %{customdata[1]:,.0f}<extra></extra>"
+                ),
+                customdata=losers[["pnl_per_unit", "open_interest"]].values,
+            ))
+
+        fig_pnl.update_layout(
+            title=dict(text="各履約價賣方盈虧 Top 10（左=賺、右=虧）", font=dict(size=14, color="#E0E0E0")),
+            xaxis=dict(title="履約價 (C/P + 點位)", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(title="P&L 總量 (點數 × 口數)", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)", zerolinecolor="rgba(255,255,255,0.3)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#E0E0E0"),
+            legend=dict(font=dict(color="#E0E0E0"), bgcolor="rgba(0,0,0,0)"),
+            height=420,
+            margin=dict(l=40, r=10, t=50, b=60),
+            barmode="relative",
+        )
+        st.plotly_chart(fig_pnl, use_container_width=True, key="seller_pnl_chart")
+
+    with st.expander("📖 這個盈虧怎麼算？"):
+        st.markdown(
+            """
+            - **Call 賣方每口 P&L** = `avg_cost − max(0, 現價 − 履約價)`
+            - **Put 賣方每口 P&L** = `avg_cost − max(0, 履約價 − 現價)`
+            - **總 P&L** = 每口 P&L × 未平倉口數，再全部加總
+            - 這是『**若此刻結算**』的帳面盈虧，不是現貨選擇權市價 P&L
+            - 正數 = 賣方賺、負數 = 賣方虧
+            - 真實盈虧還受時間價值、IV 變動影響，此為 smart money 壓力估算用途
+            """
+        )
+else:
+    st.info("此日期無賣方盈虧資料")
+
+st.divider()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1: T字報價資金地圖
 # ═══════════════════════════════════════════════════════════════════════════════
 
