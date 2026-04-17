@@ -111,13 +111,22 @@ st.header("📈 即時盤中走勢")
 st.caption(
     "加權指數 (TAIEX) 盤中即時 K 線，搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
 )
-st.markdown(
-    "📊 **完整台指期近月 K 線**（TXF1!、TX1! 等）受 TradingView 交易所授權限制無法嵌入，請至 "
-    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/) 查看。"
-)
 
 _tv_symbol = "TVC:TAIEX"
-_tv_interval = st.selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_tv_interval_select")
+_tv_cols_sk = st.columns([2, 1, 2])
+_tv_cols_sk[0].selectbox(
+    "商品",
+    ["加權指數 TAIEX"],
+    index=0,
+    key="_tv_symbol_select",
+    disabled=True,
+    help="台指期 TXF1!/TX1! 受 TradingView 交易所授權限制無法嵌入；加權指數 TAIEX 與台指期走勢高度同步。",
+)
+_tv_interval = _tv_cols_sk[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_tv_interval_select")
+_tv_cols_sk[2].markdown(
+    "📊 **完整台指期 K 線**請至 "
+    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/)"
+)
 
 import streamlit.components.v1 as _tv_components
 _tv_html = f"""
