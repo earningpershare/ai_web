@@ -278,6 +278,138 @@ def get_seller_pnl(
     }
 
 
+@router.get("/atm-vol-proxy")
+def get_atm_vol_proxy(days: int = Query(default=20, ge=10, le=90)):
+    """
+    ATM straddle cost / underlying 當作隱含波動率代理（台指 VIX-like）。
+    - 每日取近月 monthly options（LENGTH(contract_month)=6）
+    - ATM strike = 距當日近月期貨收盤最近的履約價（有 Call 也有 Put）
+    - straddle = call_avg_cost + put_avg_cost
+    - vol_ratio = straddle / underlying * 100 （%）
+    回傳序列 + 當前百分位（相對近 N 日）+ 擴張/收縮分類
+    """
+    # 期貨近月收盤（每日最小 contract_month）
+    fut_rows = query(
+        """
+        SELECT trade_date, close_price::FLOAT AS close_price FROM (
+            SELECT trade_date, close_price,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month) AS rn
+            FROM tx_futures_daily
+            WHERE session = '一般' AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        ) t WHERE rn = 1 ORDER BY trade_date
+        """,
+        (days * 2,),
+    )
+    fut_map = {str(r["trade_date"]): r["close_price"] for r in fut_rows}
+
+    # 選擇權近月 monthly（LENGTH=6）所有履約價的 Call/Put avg_cost
+    opt_rows = query(
+        """
+        SELECT trade_date, contract_month, strike_price::FLOAT AS strike_price,
+               call_put, avg_cost::FLOAT AS avg_cost
+        FROM options_strike_avg_cost
+        WHERE LENGTH(contract_month) = 6
+          AND avg_cost IS NOT NULL
+          AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        """,
+        (days * 2,),
+    )
+
+    # 按日分組；每日選最小 monthly 合約
+    by_date: dict[str, dict[str, list[dict]]] = {}
+    for r in opt_rows:
+        d = str(r["trade_date"])
+        m = r["contract_month"]
+        by_date.setdefault(d, {}).setdefault(m, []).append(r)
+
+    series: list[dict] = []
+    for trade_date in sorted(fut_map.keys()):
+        underlying = fut_map.get(trade_date)
+        months_dict = by_date.get(trade_date) or {}
+        if underlying is None or not months_dict:
+            continue
+        near_month = min(months_dict.keys())
+        strikes_near = months_dict[near_month]
+
+        # 整理 Call/Put 按 strike
+        by_strike: dict[float, dict[str, float]] = {}
+        for s in strikes_near:
+            bucket = by_strike.setdefault(s["strike_price"], {})
+            if s["call_put"] in ("C", "Call"):
+                bucket["call"] = s["avg_cost"]
+            else:
+                bucket["put"] = s["avg_cost"]
+
+        # 只保留 Call+Put 同時有的履約價
+        pairs = [(k, v) for k, v in by_strike.items() if "call" in v and "put" in v]
+        if not pairs:
+            continue
+        # 找 ATM：距 underlying 最近的 strike
+        atm_strike, atm_vals = min(pairs, key=lambda x: abs(x[0] - underlying))
+        straddle = atm_vals["call"] + atm_vals["put"]
+        vol_ratio = straddle / underlying * 100.0 if underlying else 0.0
+
+        series.append({
+            "trade_date": trade_date,
+            "underlying": underlying,
+            "near_month": near_month,
+            "atm_strike": atm_strike,
+            "call_cost": atm_vals["call"],
+            "put_cost": atm_vals["put"],
+            "straddle": straddle,
+            "vol_ratio": vol_ratio,
+        })
+
+    series = series[-days:]
+
+    summary: dict = {}
+    if len(series) >= 5:
+        ratios = [s["vol_ratio"] for s in series]
+        latest = series[-1]
+        prev = series[-2] if len(series) >= 2 else None
+        sorted_r = sorted(ratios)
+        # 百分位
+        rank = sum(1 for v in sorted_r if v <= latest["vol_ratio"])
+        pct = rank / len(sorted_r) * 100.0
+        # N 日平均
+        avg = sum(ratios) / len(ratios)
+        min_r = min(ratios)
+        max_r = max(ratios)
+        # 擴張/收縮
+        if prev is not None:
+            day_change = latest["vol_ratio"] - prev["vol_ratio"]
+        else:
+            day_change = 0.0
+        if pct >= 85:
+            state = "elevated"          # 恐慌區（波動率高）
+        elif pct >= 60:
+            state = "moderately_elevated"
+        elif pct <= 15:
+            state = "compressed"        # 極度平靜（盤整末期）
+        elif pct <= 40:
+            state = "moderately_low"
+        else:
+            state = "normal"
+        summary = {
+            "latest_date": latest["trade_date"],
+            "latest_vol_ratio": latest["vol_ratio"],
+            "latest_straddle": latest["straddle"],
+            "latest_atm_strike": latest["atm_strike"],
+            "latest_underlying": latest["underlying"],
+            "latest_near_month": latest["near_month"],
+            "percentile": pct,
+            "avg_vol_ratio": avg,
+            "min_vol_ratio": min_r,
+            "max_vol_ratio": max_r,
+            "day_change": day_change,
+            "state": state,
+        }
+
+    return {"series": series, "summary": summary, "sample_days": len(series)}
+
+
 @router.get("/night-gap-history")
 def get_night_gap_history(days: int = Query(default=10, ge=5, le=60)):
     """

@@ -1536,4 +1536,102 @@ else:
     st.info("夜盤缺口資料不足。")
 
 st.divider()
+
+# ── ATM 波動率代理（台指 VIX-like）──────────────────────────────────────────
+st.subheader("⚡ ATM 波動率代理（VIX-like）")
+st.caption("每日以近月 ATM Call+Put straddle cost / 期貨收盤 × 100 作為隱含波動率代理；高值代表恐慌/擴張，低值代表平靜/壓縮。")
+
+try:
+    _vp_resp = requests.get(f"{API_URL}/market/atm-vol-proxy", params={"days": 20}, timeout=15)
+    _vp_resp.raise_for_status()
+    _vp_data = _vp_resp.json()
+except Exception as e:
+    st.error(f"ATM 波動率 API 錯誤：{e}")
+    _vp_data = {}
+
+_vp_series = _vp_data.get("series") or []
+_vp_summary = _vp_data.get("summary") or {}
+
+if _vp_series and _vp_summary:
+    _vstate_map = {
+        "elevated": ("🔥 波動率高檔（恐慌區）", "#EF5350"),
+        "moderately_elevated": ("📈 波動率偏高", "#FFA726"),
+        "normal": ("⚪ 正常區間", "#9E9E9E"),
+        "moderately_low": ("📉 波動率偏低", "#66BB6A"),
+        "compressed": ("🟢 極度壓縮（盤整末期）", "#26A69A"),
+    }
+    _vlabel, _vcolor = _vstate_map.get(_vp_summary.get("state"), ("—", "#9E9E9E"))
+
+    vc1, vc2, vc3, vc4 = st.columns(4)
+    _latest_vr = _vp_summary.get("latest_vol_ratio", 0) or 0
+    _pct = _vp_summary.get("percentile", 0) or 0
+    _avg = _vp_summary.get("avg_vol_ratio", 0) or 0
+    _dchg = _vp_summary.get("day_change", 0) or 0
+    vc1.metric("當前波動率代理", f"{_latest_vr:.2f}%", delta=f"{_dchg:+.2f} pp")
+    vc2.metric("20 日分位", f"{_pct:.0f}%", help="值越高 = 目前比多數天高")
+    vc3.metric("20 日平均", f"{_avg:.2f}%")
+    vc4.metric("ATM straddle", f"{_vp_summary.get('latest_straddle', 0):.0f} 點",
+               help=f"ATM strike: {_vp_summary.get('latest_atm_strike', 0):.0f}")
+
+    # 狀態卡
+    _min_r = _vp_summary.get("min_vol_ratio", 0) or 0
+    _max_r = _vp_summary.get("max_vol_ratio", 0) or 0
+    st.markdown(
+        f"""
+        <div style="padding:14px; border-radius:8px; border-left:5px solid {_vcolor}; background:rgba(255,255,255,0.03); margin:10px 0;">
+          <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">當前波動率狀態</div>
+          <div style="font-size:16px; color:{_vcolor}; font-weight:600;">{_vlabel}</div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:6px;">
+            近月：<b>{_vp_summary.get('latest_near_month', '—')}</b>
+            &nbsp;|&nbsp; 期貨：{_vp_summary.get('latest_underlying', 0):.0f}
+            &nbsp;|&nbsp; 20 日區間：{_min_r:.2f}% ~ {_max_r:.2f}%
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 時序圖：vol_ratio line
+    _fig_vp = go.Figure()
+    _vp_dates = [s["trade_date"] for s in _vp_series]
+    _vp_ratios = [s["vol_ratio"] for s in _vp_series]
+    _fig_vp.add_trace(go.Scatter(
+        x=_vp_dates, y=_vp_ratios,
+        mode="lines+markers",
+        name="波動率代理 %",
+        line=dict(color="#FFB300", width=2.5),
+        marker=dict(size=7),
+        fill="tozeroy",
+        fillcolor="rgba(255,179,0,0.12)",
+    ))
+    # 平均線
+    _fig_vp.add_hline(y=_avg, line_dash="dash", line_color="#9E9E9E",
+                     annotation_text=f"20d avg {_avg:.2f}%", annotation_position="top left")
+    _fig_vp.update_layout(
+        height=340,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=20, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="straddle / spot × 100（%）"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    st.plotly_chart(_fig_vp, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **為何用 ATM straddle**：straddle cost ≈ spot × IV × √(T/365) × √(2/π)，當其他參數穩定時，straddle/spot 與 IV 成正比。這是無需 Black-Scholes 的波動率 proxy。
+            - **高值（elevated）**：選擇權權利金偏貴，市場預期大波動；常見於事件前（FOMC、結算週）或恐慌賣壓時。
+            - **低值（compressed）**：權利金便宜，市場認為平靜；極度壓縮常是盤整末期，買方可考慮建立波動率多頭（long straddle/strangle）。
+            - **注意限制**：此數值含時間價值，結算日前後會自然快速衰減，跨月時序會出現「合約切換」斷點。
+            - **配合使用**：和 PCR 反指標（Round 10）同看——PCR 極恐慌 + 波動率壓縮 = 市場過度樂觀警訊；PCR 極貪婪 + 波動率高檔 = 恐慌末期可能反彈。
+            """
+        )
+else:
+    st.info("ATM 波動率代理資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
