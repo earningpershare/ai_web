@@ -51,6 +51,7 @@ def fetch_market_data(trade_date: date) -> dict:
     itm_otm    = _get("/market/itm-otm",        {"start": ds, "end": ds})
     oi_struct  = _get("/market/oi-structure",   {"start": ds, "end": ds})
     strike_cost = _get("/options/strike-cost",  {"trade_date": ds, "limit": 200})
+    dealer_map = _get("/market/dealer-map",     {"trade_date": ds})
 
     # 近月 TX 收盤價
     tx_close = None
@@ -75,6 +76,21 @@ def fetch_market_data(trade_date: date) -> dict:
                 weighted[sp]["fund"] += cost * oi
         oi_top5 = sorted(weighted.items(), key=lambda x: x[1]["oi"], reverse=True)[:5]
 
+    # 莊家地圖：分析賣方壓力/支撐帶
+    # dealer_map API 回傳 dict（非 list），直接取用
+    dm = dealer_map if isinstance(dealer_map, dict) else {}
+    dm_strikes = dm.get("strikes", [])
+
+    # 整理賣方壓力帶（Call OTM 大口數）與支撐帶（Put OTM 大口數）
+    call_pressure = sorted(
+        [s for s in dm_strikes if s.get("call_put") == "Call"],
+        key=lambda x: abs(float(x.get("delta_oi") or 0)), reverse=True,
+    )[:5]
+    put_support = sorted(
+        [s for s in dm_strikes if s.get("call_put") == "Put"],
+        key=lambda x: abs(float(x.get("delta_oi") or 0)), reverse=True,
+    )[:5]
+
     return {
         "trade_date": ds,
         "tx_close": tx_close,
@@ -88,6 +104,9 @@ def fetch_market_data(trade_date: date) -> dict:
         "itm_otm": itm_otm[0] if itm_otm else {},
         "oi_struct": oi_struct[0] if oi_struct else {},
         "oi_top5": oi_top5,
+        "dealer_map": dm,
+        "call_pressure": call_pressure,
+        "put_support": put_support,
     }
 
 
@@ -117,174 +136,146 @@ def build_prompt(data: dict) -> str:
 
     weekly_ratio_pct = float(ois.get("weekly_oi_ratio", 0) or 0) * 100
 
-    prompt = f"""你是一位頂級的台指期貨與選擇權籌碼分析師，擁有豐富的實戰經驗。
-今日任務：根據以下 TAIFEX 實際數據，撰寫一份深度、專業、有洞見的市場籌碼觀察報告。
+    # 莊家地圖資料
+    cp = d.get("call_pressure", [])
+    ps = d.get("put_support", [])
+    dm = d.get("dealer_map", {})
+    dm_pcr = dm.get("pcr") or {}
+    dm_mp = dm.get("max_pain") or {}
 
-==================================================
-⚠️  嚴格合規限制（全程必須遵守，違反即報告無效）
-==================================================
-絕對禁止：
-  × 給予任何「建議買進/賣出」「應該持有」「值得買」等操作指令
-  × 直接預測指數漲跌方向或點位（「指數將會上漲/下跌」）
-  × 使用「支撐」「壓力」「突破」「跌破」「強烈看好/看壞」等投顧術語
-  × 任何形式的暗示性操作建議
+    call_pressure_lines = "\n".join(
+        f"    Call {int(float(s.get('strike_price',0))):,} — delta_oi {float(s.get('delta_oi',0)):+,.0f} 口, "
+        f"avg_cost {float(s.get('avg_cost',0)):,.1f}, 損平 {int(float(s.get('strike_price',0)) + float(s.get('avg_cost',0))):,}"
+        for s in cp
+    ) if cp else "    （無資料）"
 
-允許且鼓勵：
-  ✓ 客觀陳述「哪個履約價 OI 最集中」「各群體淨口數的實際數字」
-  ✓ 深度解讀籌碼結構背後的市場邏輯（描述現象，不給操作指令）
-  ✓ 條件式歷史觀察：「歷史資料顯示，當 [X] 出現時，市場曾觀察到 [Y]，但不代表必然」
-  ✓ 情境引導：「若 [事件發生]，可關注 [指標] 的變化」
-  ✓ 根據實際數據說明關鍵價位區間，讓讀者自行思考
-==================================================
+    put_support_lines = "\n".join(
+        f"    Put  {int(float(s.get('strike_price',0))):,} — delta_oi {float(s.get('delta_oi',0)):+,.0f} 口, "
+        f"avg_cost {float(s.get('avg_cost',0)):,.1f}, 損平 {int(float(s.get('strike_price',0)) - float(s.get('avg_cost',0))):,}"
+        for s in ps
+    ) if ps else "    （無資料）"
 
-==================================================
-📊 今日 TAIFEX 市場原始數據（{ds}）
-==================================================
+    prompt = f"""你是台指期籌碼分析師。根據以下數據撰寫精煉的市場觀察報告。
 
-【期貨籌碼】
-TX 近月收盤價     : {d['tx_close'] or '（無資料）'} 點
-外資 期貨淨口數   : {ext_fut.get('net_oi', '—')} 口（正=多方淨部位）
-自營商 期貨淨口數 : {dlr_fut.get('net_oi', '—')} 口
-散戶 期貨淨口數   : {ret_f.get('net_oi', '—')} 口
-外資 期貨 delta   : {ext_dir.get('futures_delta_mtx', '—')} 小台
-外資 選擇權 delta : {ext_dir.get('options_delta_mtx', '—')} 小台（BC+SP-SC-BP 折算）
-外資 合計 delta   : {ext_dir.get('total_delta_mtx', '—')} 小台
+⚠️ 合規：禁止操作建議、方向預測、投顧術語。僅陳述數據事實與條件式歷史觀察。
+📏 全篇控制在 1500～2000 字，每段直接切入重點，不要鋪陳廢話。
+📝 輸出 Markdown 純文字（# ## ### **粗體** 列表），不要 HTML。
 
-【選擇權籌碼】
-PCR（P/C 比）     : {d['pcr'].get('put_call_ratio', '—')}
-Max Pain 點位     : {mp.get('max_pain_strike', '—')} 點（距現價 {mp.get('delta_pts', '—')} pts）
-週選主力到期      : {ois.get('weekly_dominant_exp', '—')}
-週選 OI 比重      : {weekly_ratio_pct:.1f}%
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 原始數據（{ds}）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-外資選擇權部位（口）:
-  BC={ext_opt.get('call_buy_oi','—')}  SC={ext_opt.get('call_sell_oi','—')}  BP={ext_opt.get('put_buy_oi','—')}  SP={ext_opt.get('put_sell_oi','—')}
+TX 收盤: {d['tx_close'] or '—'} | PCR: {d['pcr'].get('put_call_ratio', '—')} | Max Pain: {mp.get('max_pain_strike', '—')}（距現價 {mp.get('delta_pts', '—')} pts）
+週選到期: {ois.get('weekly_dominant_exp', '—')} | 週選 OI 占比: {weekly_ratio_pct:.1f}%
 
-散戶選擇權部位（口）:
-  BC={ret_o.get('call_buy_oi','—')}  SC={ret_o.get('call_sell_oi','—')}  BP={ret_o.get('put_buy_oi','—')}  SP={ret_o.get('put_sell_oi','—')}
+期貨淨口數: 外資 {ext_fut.get('net_oi', '—')} / 自營 {dlr_fut.get('net_oi', '—')} / 散戶 {ret_f.get('net_oi', '—')}
+外資 delta: 期貨 {ext_dir.get('futures_delta_mtx', '—')} + 選擇權 {ext_dir.get('options_delta_mtx', '—')} = 合計 {ext_dir.get('total_delta_mtx', '—')} 小台
 
-自營商選擇權部位（口）:
-  BC={dlr_opt.get('call_buy_oi','—')}  SC={dlr_opt.get('call_sell_oi','—')}  BP={dlr_opt.get('put_buy_oi','—')}  SP={dlr_opt.get('put_sell_oi','—')}
+選擇權 OI（BC/SC/BP/SP）:
+  外資: {ext_opt.get('call_buy_oi','—')}/{ext_opt.get('call_sell_oi','—')}/{ext_opt.get('put_buy_oi','—')}/{ext_opt.get('put_sell_oi','—')}
+  自營: {dlr_opt.get('call_buy_oi','—')}/{dlr_opt.get('call_sell_oi','—')}/{dlr_opt.get('put_buy_oi','—')}/{dlr_opt.get('put_sell_oi','—')}
+  散戶: {ret_o.get('call_buy_oi','—')}/{ret_o.get('call_sell_oi','—')}/{ret_o.get('put_buy_oi','—')}/{ret_o.get('put_sell_oi','—')}
 
-投信選擇權部位（口）:
-  BC={tit_opt.get('call_buy_oi','—')}  SC={tit_opt.get('call_sell_oi','—')}  BP={tit_opt.get('put_buy_oi','—')}  SP={tit_opt.get('put_sell_oi','—')}
+ITM/ATM/OTM: Call {itm.get('call_itm_oi','—')}/{itm.get('call_atm_oi','—')}/{itm.get('call_otm_oi','—')} | Put {itm.get('put_itm_oi','—')}/{itm.get('put_atm_oi','—')}/{itm.get('put_otm_oi','—')}
 
-ITM/ATM/OTM 分布（口）:
-  Call: ITM={itm.get('call_itm_oi','—')} / ATM={itm.get('call_atm_oi','—')} / OTM={itm.get('call_otm_oi','—')}
-  Put : ITM={itm.get('put_itm_oi','—')} / ATM={itm.get('put_atm_oi','—')} / OTM={itm.get('put_otm_oi','—')}
+OI Top5: {top5_lines}
 
-OI 最集中履約價 Top 5（Call+Put 合計）:
-{top5_lines}
+【莊家地圖 — 賣方壓力/支撐帶】
+概念：OTM 賣方 = 主力（smart money），delta_oi（今日增減）比靜態 OI 更重要。
+上方壓力帶（Call 賣方，delta_oi 變動最大）:
+{call_pressure_lines}
+下方支撐帶（Put 賣方，delta_oi 變動最大）:
+{put_support_lines}
 
-==================================================
-📋 報告輸出要求
-==================================================
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 報告章節（四章，每章 300～500 字）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-請用純文字（Markdown 格式）輸出報告內容，不要輸出任何 HTML 標籤。
-使用 # ## ### 作為標題層級，用 **粗體** 標示重要數字，用 - 或數字列表。
-格式範例：
-  ## 一、籌碼現況總結
-  ### （一）選擇權關鍵價位
-  **Max Pain：19,000 點**，距現價 -250 點
-  - OI 最集中：18,800 點...
+## 一、莊家地圖與關鍵價位
+分析賣方的壓力帶與支撐帶分布，結合 Max Pain 與 OI Top5，
+描述賣方資金集中在哪些區間、今日增減口數揭示的方向意圖、損平價位對現價的關係。
+不要重複列出原始數字，而是解讀數字背後的意涵。
 
-必須按以下章節順序完整輸出：
+## 二、法人籌碼結構
+外資期貨 vs 選擇權 delta 是否一致、各法人 BC/SC/BP/SP 的策略傾向、
+散戶與法人的方向差異。用 2～3 個最值得注意的觀察點即可，不需逐項羅列。
 
-─────────────────────────────────────────────────
-一、籌碼現況總結
-─────────────────────────────────────────────────
+## 三、今日市場事件
+用 Google Search 搜尋「台股 {ds}」「美股 {ds}」，挑最重要的 2～3 則事件，
+每則一句話事實 + 一句話「可觀察哪個指標」。不需要寫長段落。
 
-（一）選擇權關鍵價位
-請根據 OI Top5 數據，說明：
-- 即將結算的週選（{ois.get('weekly_dominant_exp', '本週')}）OI 最集中的履約價是哪個？
-- Call 端與 Put 端各自的最大 OI 履約價在哪裡？
-- Max Pain 目前在 {mp.get('max_pain_strike', '—')} 點，與現價 {d['tx_close'] or '—'} 點相差 {mp.get('delta_pts', '—')} 點，
-  這個差距在歷史上代表什麼樣的結算動態？（條件式描述）
-- 整體 OI 分布顯示市場目前把注碼集中在哪個價格區間？
+## 四、後續觀察重點（3 點）
+結合以上分析，列出 3 個最值得追蹤的指標或價位，每點引用數字並說明原因。
 
-（二）三大法人與散戶的布局解讀
-請深度分析（用實際數字支撐，不給操作建議）：
-- 外資在期貨端（淨口數）與選擇權端（delta）的方向是否一致？若有分歧代表什麼？
-- 外資選擇權的 BC vs SC、BP vs SP 各自的口數，揭示外資目前是買方策略還是賣方策略？
-- 自營商選擇權布局的特徵為何？（偏買方還是賣方？BC/SC 比 or BP/SP 比）
-- 散戶的 BC/BP 比例（BC={ret_o.get('call_buy_oi','—')} vs BP={ret_o.get('put_buy_oi','—')}）顯示散戶整體傾向為何？
-  歷史上這樣的散戶結構出現時，市場曾有哪些走向？（條件式，不做預測）
-- 三大法人與散戶方向是否出現顯著差異？這種差異在籌碼學上的意涵為何？
+---
+最後附上免責聲明（逐字保留）：
+「本報告源自 TAIFEX 公開資訊及公開新聞，由 AI 自動生成，僅供資料呈現與研究用途，不構成投資建議。期貨交易涉及高槓桿風險，請自行評估。」
 
-（三）短線（週選）vs 長線（月選）籌碼狀況
-- 目前週選 OI 占比 {weekly_ratio_pct:.1f}%，代表目前市場主要參與者以短線還是長線佈局為主？
-- ITM/ATM/OTM 比例揭示市場目前對於價格停留區間的預期集中在哪裡？
-- 週選即將結算（{ois.get('weekly_dominant_exp', '—')}），若結算前出現什麼樣的籌碼變化值得特別留意？
-
-─────────────────────────────────────────────────
-二、時事結合（請使用 Google Search 搜尋後填入）
-─────────────────────────────────────────────────
-
-搜尋關鍵字：「台股 台指期 {ds}」「TAIEX {ds}」「美股 {ds}」「台幣匯率 {ds}」
-請列出今日對台指有潛在影響的重要市場事件，包括但不限於：
-- 美股前日走勢與主要科技股動態
-- 台幣兌美元匯率變化
-- 重要總經數據公布（CPI、非農、Fed 官員講話等）
-- 台灣在地事件（外資買賣超、上市公司法說/財報、政策面消息）
-- 地緣政治或國際貿易相關消息
-
-每個事件：
-1. 客觀描述「發生了什麼」（純事實，不加方向判斷）
-2. 說明「若此事件持續發展，可觀察 [哪個期貨/選擇權指標] 的變化」
-
-─────────────────────────────────────────────────
-三、值得持續觀察的重點（3～5 點）
-─────────────────────────────────────────────────
-
-根據今日數據，列出後續最值得追蹤的籌碼指標或價位，每點需：
-- 引用實際數字
-- 說明為何值得關注
-- 允許使用條件式歷史觀察句型
-
-─────────────────────────────────────────────────
-四、免責聲明（必須逐字完整保留）
-─────────────────────────────────────────────────
-
-「本報告所有內容均源自台灣期貨交易所（TAIFEX）公開資訊及公開新聞媒體，
- 由 AI 系統自動整理生成，僅供資料呈現與學術研究用途，
- 不構成任何投資建議、期貨交易建議或買賣推薦。
- 本服務不具期貨信託事業、期貨顧問事業或任何金融從業資格。
- 期貨交易涉及高度槓桿風險，可能損失全部本金。
- 任何投資決策請自行評估風險，並諮詢合格之期貨顧問。
- 過去的數據走勢不代表未來的交易結果。」
-
-現在請開始輸出 Markdown 格式報告（純文字，不要任何 HTML 標籤）："""
+開始輸出："""
 
     return prompt
 
 
 # ── Gemini 呼叫 ───────────────────────────────────────────────────────────────
 
+# 模型偏好順序：越前面越優先
+_MODEL_PREFERENCE = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"]
+
+
+def _pick_best_model() -> str:
+    """動態查詢 Gemini API 可用模型，回傳最強的一個。"""
+    try:
+        resp = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}",
+            timeout=10,
+        )
+        resp.raise_for_status()
+        available = {m["name"].replace("models/", "") for m in resp.json().get("models", [])}
+        for model in _MODEL_PREFERENCE:
+            if model in available:
+                logger.info("動態選擇 Gemini 模型: %s", model)
+                return model
+    except Exception as e:
+        logger.warning("無法查詢 Gemini 模型列表（%s），使用預設", e)
+    fallback = _MODEL_PREFERENCE[0]
+    logger.info("使用預設 Gemini 模型: %s", fallback)
+    return fallback
+
+
 def call_gemini(prompt: str) -> str:
     """
     透過 REST API 呼叫 Gemini，啟用 Google Search grounding 取得當日新聞。
-    使用 v1beta endpoint 以確保 grounding 功能可用。
+    動態選擇可用的最強模型。
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY 未設定")
 
+    model = _pick_best_model()
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-pro-latest:generateContent?key={GEMINI_API_KEY}"
+        f"{model}:generateContent?key={GEMINI_API_KEY}"
     )
 
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
             "temperature": 0.2,
-            "maxOutputTokens": 8192,
+            "maxOutputTokens": 16384,
         },
         "tools": [{"googleSearch": {}}],
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=120)
+        resp = requests.post(url, json=payload, timeout=180)
         resp.raise_for_status()
         data = resp.json()
+
+        # 記錄結束原因，方便診斷截斷問題
+        finish_reason = data["candidates"][0].get("finishReason", "UNKNOWN")
+        logger.info("Gemini finishReason: %s", finish_reason)
+        if finish_reason == "MAX_TOKENS":
+            logger.warning("⚠️ Gemini 輸出被截斷（達到 maxOutputTokens 上限）")
+
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         logger.info("Gemini 回傳內容（前 300 字）:\n%s", text[:300])
 
