@@ -104,68 +104,6 @@ st.sidebar.caption(f"今日: {selected_date}　前日: {prev_date}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SECTION -1: 即時盤中 K 線（TradingView Advanced Chart Widget）
-# ═══════════════════════════════════════════════════════════════════════════════
-
-st.header("📈 即時盤中走勢")
-st.caption(
-    "加權指數 (TAIEX) 盤中即時 K 線，搭配下方的莊家地圖與賣方壓力帶，可直觀判斷『此刻價位是否貼近賣方防守點』。"
-)
-
-_tv_symbol = "TWSE:IX0001"
-_tv_cols_sk = st.columns([2, 1, 2])
-_tv_cols_sk[0].selectbox(
-    "商品",
-    ["加權指數 IX0001"],
-    index=0,
-    key="_tv_symbol_select",
-    disabled=True,
-    help="台灣證交所發行量加權股價指數（IX0001），與台指期走勢高度同步。台指期 TXF1!/TX1! 受 TradingView 交易所授權限制無法嵌入。",
-)
-_tv_interval = _tv_cols_sk[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_tv_interval_select")
-_tv_cols_sk[2].markdown(
-    "📊 **完整台指期 K 線**請至 "
-    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/)"
-)
-
-import streamlit.components.v1 as _tv_components
-_tv_html = f"""
-<div class="tradingview-widget-container" style="height:460px;width:100%;">
-  <div id="tv_chart_container" style="height:420px;width:100%;"></div>
-  <div class="tradingview-widget-copyright" style="font-size:10px;color:#666;text-align:right;margin-top:4px">
-    <a href="https://www.tradingview.com/symbols/{_tv_symbol}/" rel="noopener nofollow" target="_blank">
-      <span>由 TradingView 提供即時報價</span>
-    </a>
-  </div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-    new TradingView.widget({{
-      "autosize": false,
-      "width": "100%",
-      "height": 420,
-      "symbol": "{_tv_symbol}",
-      "interval": "{_tv_interval}",
-      "timezone": "Asia/Taipei",
-      "theme": "dark",
-      "style": "1",
-      "locale": "zh_TW",
-      "toolbar_bg": "#131722",
-      "enable_publishing": false,
-      "hide_top_toolbar": false,
-      "hide_legend": false,
-      "save_image": false,
-      "container_id": "tv_chart_container",
-      "studies": ["MASimple@tv-basicstudies", "Volume@tv-basicstudies"]
-    }});
-  </script>
-</div>
-"""
-_tv_components.html(_tv_html, height=470, scrolling=False)
-
-st.divider()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 0: 莊家地圖 — 賣方壓力/支撐帶總覽
 # ═══════════════════════════════════════════════════════════════════════════════
 

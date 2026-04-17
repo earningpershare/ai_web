@@ -16,58 +16,6 @@ auth_sidebar()
 st.title("📊 市場快照")
 st.caption("三大法人期貨籌碼概覽 — 每交易日收盤後更新　🟢 免費公開")
 
-# ── 即時盤中 K 線（TradingView Widget） ─────────────────────────────────────────
-st.markdown("### 📈 即時盤中走勢")
-_tv_cols = st.columns([2, 1, 2])
-_tv_symbol = "TWSE:IX0001"
-_tv_cols[0].selectbox(
-    "商品",
-    ["加權指數 IX0001"],
-    index=0,
-    key="_ov_tv_symbol",
-    disabled=True,
-    help="台灣證交所發行量加權股價指數（IX0001），與台指期走勢高度同步。台指期 TXF1!/TX1! 受 TradingView 交易所授權限制無法嵌入。",
-)
-_tv_interval = _tv_cols[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_ov_tv_interval")
-_tv_cols[2].markdown(
-    "📊 **完整台指期 K 線**請至 "
-    "[TradingView 台指期專頁 ↗](https://www.tradingview.com/symbols/TAIFEX-TXF1!/)"
-)
-
-import streamlit.components.v1 as _tv_components
-_tv_html = f"""
-<div class="tradingview-widget-container" style="height:400px;width:100%;">
-  <div id="tv_ov_container" style="height:360px;width:100%;"></div>
-  <div class="tradingview-widget-copyright" style="font-size:10px;color:#666;text-align:right;margin-top:4px">
-    <a href="https://www.tradingview.com/symbols/{_tv_symbol}/" rel="noopener nofollow" target="_blank">
-      <span>由 TradingView 提供即時報價</span>
-    </a>
-  </div>
-  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-  <script type="text/javascript">
-    new TradingView.widget({{
-      "autosize": false,
-      "width": "100%",
-      "height": 360,
-      "symbol": "{_tv_symbol}",
-      "interval": "{_tv_interval}",
-      "timezone": "Asia/Taipei",
-      "theme": "dark",
-      "style": "1",
-      "locale": "zh_TW",
-      "toolbar_bg": "#131722",
-      "enable_publishing": false,
-      "hide_top_toolbar": false,
-      "hide_legend": false,
-      "save_image": false,
-      "container_id": "tv_ov_container",
-      "studies": ["Volume@tv-basicstudies"]
-    }});
-  </script>
-</div>
-"""
-_tv_components.html(_tv_html, height=410, scrolling=False)
-
 # ── 夜盤速覽（差異化籌碼資訊） ──────────────────────────────────────────────────
 st.markdown("### 🌙 最新夜盤速覽")
 try:
