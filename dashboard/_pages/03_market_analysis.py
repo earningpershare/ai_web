@@ -825,4 +825,85 @@ else:
     st.info("目前樣本數不足，等更多結算日資料累積後此區會顯示分析結果。")
 
 st.divider()
+
+# ── Calendar Spread（跨期價差） ───────────────────────────────────────────────
+st.subheader("📐 跨期價差（Calendar Spread）— 近月 vs 次月")
+st.caption("近月與次月 TX 期貨收盤價差；負值 = contango（次月高於近月，多頭結構），正值 = backwardation（近月高於次月，空頭/事件壓力）")
+
+try:
+    _cs_resp = requests.get(f"{API_URL}/market/calendar-spread", params={"days": 30}, timeout=15)
+    _cs_resp.raise_for_status()
+    _cs_data = _cs_resp.json()
+except Exception as e:
+    st.error(f"跨期價差 API 錯誤：{e}")
+    _cs_data = {}
+
+_cs_series = _cs_data.get("series") or []
+_cs_stats = _cs_data.get("stats") or {}
+
+if _cs_series and _cs_stats:
+    _k1, _k2, _k3, _k4 = st.columns(4)
+    _latest = _cs_stats.get("latest_spread") or 0
+    _state = _cs_stats.get("state") or "—"
+    _z = _cs_stats.get("z_score") or 0
+    _mean = _cs_stats.get("mean") or 0
+    _state_label = {"contango": "Contango（次月高）", "backwardation": "Backwardation（近月高）", "flat": "平水"}.get(_state, _state)
+    _k1.metric("最新 spread", f"{_latest:+.0f} 點")
+    _k2.metric("結構狀態", _state_label)
+    _k3.metric("30 日 z-score", f"{_z:+.2f}")
+    _k4.metric("30 日均值", f"{_mean:+.1f} 點")
+
+    _df_cs = pd.DataFrame(_cs_series)
+    _df_cs["trade_date"] = pd.to_datetime(_df_cs["trade_date"])
+
+    _fig_cs = make_subplots(specs=[[{"secondary_y": True}]])
+    _fig_cs.add_trace(
+        go.Scatter(x=_df_cs["trade_date"], y=_df_cs["near_close"], name="近月收盤",
+                   line=dict(color="#4FC3F7", width=2),
+                   hovertemplate="%{x|%Y-%m-%d}<br>近月 %{y:,.0f}<extra></extra>"),
+        secondary_y=False,
+    )
+    _fig_cs.add_trace(
+        go.Scatter(x=_df_cs["trade_date"], y=_df_cs["next_close"], name="次月收盤",
+                   line=dict(color="#BA68C8", width=2, dash="dot"),
+                   hovertemplate="%{x|%Y-%m-%d}<br>次月 %{y:,.0f}<extra></extra>"),
+        secondary_y=False,
+    )
+    _spread_colors = ["#EF5350" if v > 0 else "#66BB6A" for v in _df_cs["spread"]]
+    _fig_cs.add_trace(
+        go.Bar(x=_df_cs["trade_date"], y=_df_cs["spread"], name="Spread（近-次）",
+               marker_color=_spread_colors, opacity=0.55,
+               hovertemplate="%{x|%Y-%m-%d}<br>spread %{y:+,.0f} 點<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_cs.update_layout(
+        title=dict(text="30 日跨期價差", font=dict(size=14, color="#E0E0E0")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        height=380,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.08),
+        margin=dict(l=40, r=40, t=50, b=40),
+        barmode="relative",
+    )
+    _fig_cs.update_xaxes(title="交易日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)")
+    _fig_cs.update_yaxes(title="收盤價（點）", secondary_y=False, color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)")
+    _fig_cs.update_yaxes(title="Spread（點）", secondary_y=True, color="#E0E0E0", zerolinecolor="rgba(255,255,255,0.3)", showgrid=False)
+
+    st.plotly_chart(_fig_cs, use_container_width=True, key="calendar_spread_chart")
+
+    with st.expander("📖 如何解讀跨期價差？"):
+        st.markdown(
+            """
+            - **Contango（spread < 0，次月高於近月）**：常見於多頭、市場平靜期；反映持有遠月的溢價。
+            - **Backwardation（spread > 0，近月高於次月）**：常伴隨結算日壓力、重大事件或空頭情緒；需留意波動放大風險。
+            - **z-score**：標準化後的異常值指標，|z| > 2 代表偏離 30 日均值超過 2 個標準差，值得關注。
+            - 注意：結算前 3-5 交易日近月合約會因 roll（換倉）造成 spread 扭曲，屬正常現象。
+            """
+        )
+else:
+    st.info("跨期價差資料不足（需至少兩個近月合約同時有成交），等 TAIFEX 次月合約流動性累積後顯示。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

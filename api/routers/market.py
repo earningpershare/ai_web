@@ -465,6 +465,90 @@ def get_night_session(
     }
 
 
+@router.get("/calendar-spread")
+def get_calendar_spread(
+    days: int = Query(default=30, ge=5, le=180),
+):
+    """
+    台指期貨近月 vs 次月 spread（跨期價差）時序。
+    - 取 contract_code='TX'、session='一般'、LENGTH(contract_month)=6
+    - 對每個 trade_date 取最小兩個 contract_month → 視為近月/次月
+    - spread = near_close - next_close
+    - contango (spread < 0，次月高於近月) / backwardation (spread > 0，近月高於次月)
+    回傳：近 N 日 spread 時序 + 當前 z-score + 敘述性統計
+    """
+    rows = query(
+        """
+        WITH ranked AS (
+            SELECT trade_date, contract_month, close_price,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month ASC) AS rn
+            FROM tx_futures_daily
+            WHERE contract_code = 'TX' AND session = '一般'
+              AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - (%s * 2) * INTERVAL '1 day')
+        )
+        SELECT trade_date,
+               MAX(CASE WHEN rn = 1 THEN contract_month END) AS near_month,
+               MAX(CASE WHEN rn = 1 THEN close_price END)::FLOAT AS near_close,
+               MAX(CASE WHEN rn = 2 THEN contract_month END) AS next_month,
+               MAX(CASE WHEN rn = 2 THEN close_price END)::FLOAT AS next_close
+        FROM ranked
+        WHERE rn <= 2
+        GROUP BY trade_date
+        HAVING MAX(CASE WHEN rn = 2 THEN close_price END) IS NOT NULL
+        ORDER BY trade_date DESC
+        LIMIT %s
+        """,
+        (days, days),
+    )
+    # 反轉為時間順序
+    series = list(reversed(rows))
+    spreads = []
+    for r in series:
+        nc = r.get("near_close")
+        nx = r.get("next_close")
+        if nc is None or nx is None:
+            continue
+        spread = nc - nx
+        spreads.append({
+            "trade_date": str(r["trade_date"]),
+            "near_month": r["near_month"],
+            "near_close": nc,
+            "next_month": r["next_month"],
+            "next_close": nx,
+            "spread": spread,
+            "spread_pct": (spread / nc * 100) if nc else None,
+        })
+
+    # 統計（z-score）
+    stats = None
+    if spreads:
+        vals = [s["spread"] for s in spreads]
+        n = len(vals)
+        mean = sum(vals) / n
+        var = sum((v - mean) ** 2 for v in vals) / n if n > 0 else 0
+        std = var ** 0.5
+        latest = vals[-1]
+        z = ((latest - mean) / std) if std > 0 else 0
+        state = "contango" if latest < 0 else ("backwardation" if latest > 0 else "flat")
+        stats = {
+            "latest_spread": latest,
+            "mean": mean,
+            "std": std,
+            "z_score": z,
+            "state": state,
+            "samples": n,
+            "min": min(vals),
+            "max": max(vals),
+        }
+
+    return {
+        "series": spreads,
+        "stats": stats,
+    }
+
+
 def _third_wednesday(year: int, month: int) -> date:
     """回傳該月第三個星期三（台指月選擇權結算日）。"""
     first = date(year, month, 1)
