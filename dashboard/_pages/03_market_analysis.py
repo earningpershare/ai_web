@@ -1221,4 +1221,113 @@ else:
     st.info("PCR 百分位資料不足。")
 
 st.divider()
+
+# ── 三大法人 10 日動能排行 ────────────────────────────────────────────────────
+st.subheader("🏛️ 三大法人 10 日動能排行")
+st.caption("以臺股期貨 net_oi 10 日淨變動排序三大法人，觀察誰在積極加倉、誰在減碼或反手。")
+
+try:
+    _im_resp = requests.get(f"{API_URL}/market/institutional-momentum", params={"days": 10}, timeout=15)
+    _im_resp.raise_for_status()
+    _im_data = _im_resp.json()
+except Exception as e:
+    st.error(f"法人動能 API 錯誤：{e}")
+    _im_data = {}
+
+_im_institutions = _im_data.get("institutions") or []
+
+if _im_institutions:
+    _dir_map = {
+        "accumulating_long": ("📈 積極加多單", "#26A69A"),
+        "reducing_long": ("🔻 減碼多單", "#FFA726"),
+        "accumulating_short": ("📉 積極加空單", "#EF5350"),
+        "reducing_short": ("🔺 減碼空單", "#FFA726"),
+        "flipping_to_long": ("🔄 反手做多", "#42A5F5"),
+        "flipping_to_short": ("🔄 反手做空", "#AB47BC"),
+        "neutral": ("⚪ 盤整", "#9E9E9E"),
+        "insufficient_data": ("— 資料不足", "#757575"),
+    }
+
+    # 依 rank 排序（1 = 動能最強）
+    _ranked = sorted(_im_institutions, key=lambda x: x.get("rank", 99))
+
+    # 排名卡片
+    rcols = st.columns(3)
+    for _i, _inst in enumerate(_ranked):
+        _label, _color = _dir_map.get(_inst.get("direction"), ("—", "#9E9E9E"))
+        _rank = _inst.get("rank", _i + 1)
+        _name = _inst.get("institution_zh", "—")
+        _change = _inst.get("net_change", 0) or 0
+        _first = _inst.get("first_net_oi")
+        _last = _inst.get("last_net_oi")
+        _avg = _inst.get("avg_daily_change", 0.0) or 0.0
+        with rcols[_i]:
+            st.markdown(
+                f"""
+                <div style="padding:14px; border-radius:8px; border-left:5px solid {_color}; background:rgba(255,255,255,0.03);">
+                  <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">RANK #{_rank}</div>
+                  <div style="font-size:18px; font-weight:600; color:#E0E0E0;">{_name}</div>
+                  <div style="font-size:14px; color:{_color}; margin:6px 0; font-weight:500;">{_label}</div>
+                  <div style="font-size:13px; color:#BDBDBD; line-height:1.6;">
+                    10 日淨變動：<b style="color:#E0E0E0;">{_change:+,}</b> 口<br>
+                    日均變動：<b style="color:#E0E0E0;">{_avg:+,.0f}</b> 口<br>
+                    起點→終點：{_first if _first is not None else '—':,} → {_last if _last is not None else '—':,}
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    # 三法人 net_oi 時序（疊線）
+    _fig_im = go.Figure()
+    _color_line = {
+        "foreign": "#FFB300",
+        "trust": "#42A5F5",
+        "dealer": "#AB47BC",
+    }
+    _label_line = {"foreign": "外資及陸資", "trust": "投信", "dealer": "自營商"}
+    for _inst in _im_institutions:
+        _k = _inst.get("institution")
+        _s = _inst.get("series") or []
+        if not _s:
+            continue
+        _fig_im.add_trace(go.Scatter(
+            x=[p["trade_date"] for p in _s],
+            y=[p["net_oi"] for p in _s],
+            mode="lines+markers",
+            name=_label_line.get(_k, _k),
+            line=dict(color=_color_line.get(_k, "#888"), width=2),
+            marker=dict(size=6),
+        ))
+    _fig_im.add_hline(y=0, line_dash="dot", line_color="#666", opacity=0.6)
+    _fig_im.update_layout(
+        height=360,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=20, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="net_oi（口）"),
+        legend=dict(orientation="h", y=1.1, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    st.plotly_chart(_fig_im, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **動能定義**：10 日內 net_oi 的淨變動量，正值 = 加倉，負值 = 減碼。
+            - **方向分類**：
+              - 📈 積極加多單：原本偏多，進一步加大多單部位
+              - 📉 積極加空單：原本偏空，進一步加大空單部位
+              - 🔻 減碼多單 / 🔺 減碼空單：獲利了結或止損
+              - 🔄 反手：部位由多轉空（或相反），情緒翻轉強訊號
+            - **排名**：依 10 日淨變動絕對值大小，RANK #1 = 動能最強，代表該機構方向感最明確。
+            - **對比 Round 8 背離偵測**：背離看的是法人 vs 指數的「相反方向」；動能排行看的是「三大法人內部的競速」，兩者互補。
+            """
+        )
+else:
+    st.info("法人動能資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

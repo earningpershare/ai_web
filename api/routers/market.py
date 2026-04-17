@@ -755,6 +755,112 @@ def get_institutional_divergence(
     }
 
 
+@router.get("/institutional-momentum")
+def get_institutional_momentum(
+    days: int = Query(default=10, ge=5, le=30),
+):
+    """
+    三大法人 N 日 net_oi 動能排行。
+    - 臺股期貨 contract_code，取最近 N 個交易日
+    - 每家機構計算：first / last / net_change / avg_daily_change / std / momentum_z
+    - 方向分類：accumulating_long / reducing_long / accumulating_short / reducing_short
+                / flipping_to_long / flipping_to_short / neutral
+    - 依 abs(net_change) 排名 1-3
+    """
+    rows = query(
+        """
+        SELECT trade_date, institution_type, net_oi
+        FROM institutional_futures
+        WHERE contract_code = '臺股期貨'
+          AND trade_date >= (CURRENT_DATE - (%s * 2) * INTERVAL '1 day')
+          AND net_oi IS NOT NULL
+        ORDER BY trade_date
+        """,
+        (days,),
+    )
+
+    by_inst: dict[str, list[dict]] = {}
+    for r in rows:
+        by_inst.setdefault(r["institution_type"], []).append({
+            "trade_date": str(r["trade_date"]),
+            "net_oi": int(r["net_oi"]),
+        })
+
+    def _classify(first: int, last: int) -> str:
+        if first is None or last is None:
+            return "insufficient_data"
+        if abs(last - first) < 200:
+            return "neutral"
+        if first >= 0 and last >= 0:
+            return "accumulating_long" if last > first else "reducing_long"
+        if first <= 0 and last <= 0:
+            return "accumulating_short" if last < first else "reducing_short"
+        if first < 0 and last > 0:
+            return "flipping_to_long"
+        if first > 0 and last < 0:
+            return "flipping_to_short"
+        return "neutral"
+
+    results: list[dict] = []
+    name_map = {"外資及陸資": "foreign", "投信": "trust", "自營商": "dealer"}
+    for inst_zh, key in name_map.items():
+        raw = by_inst.get(inst_zh, [])
+        series = raw[-days:] if len(raw) >= days else raw
+        if len(series) < 2:
+            results.append({
+                "institution": key,
+                "institution_zh": inst_zh,
+                "series": series,
+                "first_net_oi": None, "last_net_oi": None,
+                "net_change": 0, "avg_daily_change": 0.0,
+                "std_daily_change": 0.0, "momentum_z": 0.0,
+                "direction": "insufficient_data",
+            })
+            continue
+        first_v = series[0]["net_oi"]
+        last_v = series[-1]["net_oi"]
+        deltas = [series[i]["net_oi"] - series[i - 1]["net_oi"] for i in range(1, len(series))]
+        avg_d = sum(deltas) / len(deltas) if deltas else 0.0
+        if len(deltas) >= 2:
+            mean = avg_d
+            var = sum((x - mean) ** 2 for x in deltas) / (len(deltas) - 1)
+            std = var ** 0.5
+        else:
+            std = 0.0
+        mom_z = (avg_d / std) if std > 0 else 0.0
+        results.append({
+            "institution": key,
+            "institution_zh": inst_zh,
+            "series": series,
+            "first_net_oi": first_v,
+            "last_net_oi": last_v,
+            "net_change": last_v - first_v,
+            "avg_daily_change": avg_d,
+            "std_daily_change": std,
+            "momentum_z": mom_z,
+            "direction": _classify(first_v, last_v),
+        })
+
+    # 依 abs(net_change) 排名
+    sorted_by_mag = sorted(results, key=lambda r: abs(r.get("net_change") or 0), reverse=True)
+    for i, r in enumerate(sorted_by_mag):
+        r["rank"] = i + 1
+
+    # 取得共同最新交易日
+    latest_date = None
+    for r in results:
+        if r["series"]:
+            d = r["series"][-1]["trade_date"]
+            if latest_date is None or d > latest_date:
+                latest_date = d
+
+    return {
+        "latest_date": latest_date,
+        "window_days": days,
+        "institutions": results,
+    }
+
+
 @router.get("/calendar-spread")
 def get_calendar_spread(
     days: int = Query(default=30, ge=5, le=180),
