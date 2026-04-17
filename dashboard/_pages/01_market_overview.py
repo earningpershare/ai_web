@@ -15,6 +15,90 @@ auth_sidebar()
 
 st.title("📊 市場快照")
 st.caption("三大法人期貨籌碼概覽 — 每交易日收盤後更新　🟢 免費公開")
+
+# ── 即時盤中 K 線（TradingView Widget） ─────────────────────────────────────────
+st.markdown("### 📈 即時盤中走勢")
+_tv_cols = st.columns([3, 1, 1])
+_tv_options = {
+    "台指期近月 (TXF1!)": "TAIFEX:TXF1!",
+    "加權指數 (TAIEX)": "TVC:TAIEX",
+    "台指期主連 (TX1!)": "TAIFEX:TX1!",
+}
+_tv_label = _tv_cols[0].selectbox("標的", list(_tv_options.keys()), index=0, key="_ov_tv_symbol")
+_tv_symbol = _tv_options[_tv_label]
+_tv_interval = _tv_cols[1].selectbox("週期", ["5", "15", "30", "60", "D"], index=1, key="_ov_tv_interval")
+
+import streamlit.components.v1 as _tv_components
+_tv_html = f"""
+<div class="tradingview-widget-container" style="height:400px;width:100%;">
+  <div id="tv_ov_container" style="height:360px;width:100%;"></div>
+  <div class="tradingview-widget-copyright" style="font-size:10px;color:#666;text-align:right;margin-top:4px">
+    <a href="https://www.tradingview.com/symbols/{_tv_symbol}/" rel="noopener nofollow" target="_blank">
+      <span>由 TradingView 提供即時報價</span>
+    </a>
+  </div>
+  <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+  <script type="text/javascript">
+    new TradingView.widget({{
+      "autosize": false,
+      "width": "100%",
+      "height": 360,
+      "symbol": "{_tv_symbol}",
+      "interval": "{_tv_interval}",
+      "timezone": "Asia/Taipei",
+      "theme": "dark",
+      "style": "1",
+      "locale": "zh_TW",
+      "toolbar_bg": "#131722",
+      "enable_publishing": false,
+      "hide_top_toolbar": false,
+      "hide_legend": false,
+      "save_image": false,
+      "container_id": "tv_ov_container",
+      "studies": ["Volume@tv-basicstudies"]
+    }});
+  </script>
+</div>
+"""
+_tv_components.html(_tv_html, height=410, scrolling=False)
+
+# ── 夜盤速覽（差異化籌碼資訊） ──────────────────────────────────────────────────
+st.markdown("### 🌙 最新夜盤速覽")
+try:
+    _ns_resp = requests.get(f"{API_URL}/market/night-session", timeout=10)
+    _ns_resp.raise_for_status()
+    _ns = _ns_resp.json()
+except Exception:
+    _ns = {}
+
+if _ns and _ns.get("night_session"):
+    _td = _ns.get("trade_date", "—")
+    _day = _ns.get("day_session") or {}
+    _night = _ns.get("night_session") or {}
+    _gap = _ns.get("gap_day_to_night")
+    _gap_pct = _ns.get("gap_day_to_night_pct")
+    _opt = _ns.get("options_night_summary") or {}
+    _gap_color = "#EF5350" if (_gap or 0) < 0 else "#66BB6A" if (_gap or 0) > 0 else "#888"
+    _gap_sign = "+" if (_gap or 0) > 0 else ""
+
+    _ns_cols = st.columns(4)
+    _ns_cols[0].metric("夜盤收盤", f"{_night.get('close', '—'):,.0f}" if _night.get("close") else "—",
+                       delta=None)
+    _ns_cols[1].metric("日盤→夜盤缺口",
+                       f"{_gap_sign}{_gap:,.0f} 點" if _gap is not None else "—",
+                       delta=f"{_gap_sign}{_gap_pct:.2f}%" if _gap_pct is not None else None,
+                       delta_color="normal" if (_gap or 0) >= 0 else "inverse")
+    _ns_cols[2].metric("夜盤成交量", f"{_night.get('volume', 0):,}" if _night.get("volume") else "—")
+    _cv = _opt.get("call_volume") or 0
+    _pv = _opt.get("put_volume") or 0
+    _pcr = (_pv / _cv) if _cv else None
+    _ns_cols[3].metric("夜盤選擇權 P/C Ratio",
+                       f"{_pcr:.2f}" if _pcr is not None else "—",
+                       help=f"Call {_cv:,} / Put {_pv:,}")
+    st.caption(f"資料日期：{_td}　|　夜盤 15:00~次日 05:00　|　詳細分析見 [市場進階分析](/analysis)（Pro）")
+else:
+    st.caption("目前無最新夜盤資料。")
+
 st.divider()
 
 
