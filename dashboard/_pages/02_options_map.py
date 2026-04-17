@@ -367,6 +367,137 @@ else:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# SECTION 0.5: 莊家地圖 — 5 日壓力/支撐帶時序演化
+# ═══════════════════════════════════════════════════════════════════════════════
+
+st.header("🧭 賣方軌跡 — 5 日壓力 / 支撐帶演化")
+st.caption(
+    "觀察賣方的『方向意圖』— 壓力帶點位是否漂移？delta_oi 是否連續加碼？"
+    "這是單日莊家地圖看不出的時序訊號。"
+)
+
+try:
+    _hist_r = requests.get(
+        f"{API_URL}/market/dealer-map-history",
+        params={"days": 5, "end_date": str(selected_date)},
+        timeout=15,
+    )
+    _hist_r.raise_for_status()
+    hist_data = _hist_r.json()
+except Exception as e:
+    hist_data = None
+    st.warning(f"無法載入 5 日演化資料：{e}")
+
+if hist_data and hist_data.get("strikes"):
+    import pandas as pd_local
+    hist_df = pd_local.DataFrame(hist_data["strikes"])
+    hist_df["trade_date"] = pd_local.to_datetime(hist_df["trade_date"]).dt.strftime("%m/%d")
+    hist_df["strike_price"] = hist_df["strike_price"].astype(float)
+    hist_df["open_interest"] = hist_df["open_interest"].astype(float)
+    hist_df["delta_oi"] = hist_df["delta_oi"].astype(float)
+
+    # 對每個交易日，只留 Call/Put 各自 OI 前 8 名（避免 timeline 太擁擠）
+    top_rows = []
+    for (d_, cp_), g_ in hist_df.groupby(["trade_date", "call_put"]):
+        top_rows.append(g_.nlargest(8, "open_interest"))
+    hist_df = pd_local.concat(top_rows, ignore_index=True) if top_rows else hist_df
+
+    # 分成 Call / Put 兩張 timeline，方便解讀
+    col_l, col_r = st.columns(2)
+
+    def _plot_timeline(sub_df, color_scale, title):
+        if sub_df.empty:
+            return None
+        # 氣泡大小 ∝ OI；顏色 ∝ delta_oi（加碼=深色，平倉=淺色）
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=sub_df["trade_date"],
+            y=sub_df["strike_price"],
+            mode="markers",
+            marker=dict(
+                size=sub_df["open_interest"] / sub_df["open_interest"].max() * 40 + 8,
+                color=sub_df["delta_oi"],
+                colorscale=color_scale,
+                cmin=-max(abs(sub_df["delta_oi"].min()), abs(sub_df["delta_oi"].max())),
+                cmax=max(abs(sub_df["delta_oi"].min()), abs(sub_df["delta_oi"].max())),
+                colorbar=dict(title="delta_oi<br>（加碼/平倉）", thickness=10),
+                line=dict(color="rgba(255,255,255,0.3)", width=1),
+            ),
+            text=[f"{int(s):,} / OI {int(oi):,}<br>Δ {int(doi):+,}"
+                  for s, oi, doi in zip(sub_df["strike_price"], sub_df["open_interest"], sub_df["delta_oi"])],
+            hovertemplate="%{text}<br>日期: %{x}<extra></extra>",
+        ))
+
+        # 疊上現價折線
+        ub = hist_data.get("underlying_by_date") or {}
+        under_series = []
+        for d_ in sorted(sub_df["trade_date"].unique()):
+            # hist_df 的 trade_date 已經是 MM/DD 格式，需要對回 underlying_by_date 的 YYYY-MM-DD key
+            for full_d, val in ub.items():
+                mmdd = pd_local.to_datetime(full_d).strftime("%m/%d")
+                if mmdd == d_:
+                    under_series.append((d_, val))
+                    break
+        if under_series:
+            fig.add_trace(go.Scatter(
+                x=[s[0] for s in under_series],
+                y=[s[1] for s in under_series],
+                mode="lines+markers",
+                line=dict(color="#FFD600", width=2, dash="dot"),
+                marker=dict(size=6, color="#FFD600"),
+                name="期貨收盤",
+                hovertemplate="收盤 %{y:,.0f}<extra></extra>",
+            ))
+
+        fig.update_layout(
+            title=dict(text=title, font=dict(size=14, color="#E0E0E0")),
+            xaxis=dict(title="交易日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+            yaxis=dict(title="履約價", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)"),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#E0E0E0"),
+            showlegend=False,
+            height=420,
+            margin=dict(l=40, r=10, t=40, b=40),
+        )
+        return fig
+
+    call_df = hist_df[hist_df["call_put"] == "Call"]
+    put_df  = hist_df[hist_df["call_put"] == "Put"]
+
+    with col_l:
+        fig_c = _plot_timeline(call_df, "Reds", "🔴 Call 壓力帶（上方） — 氣泡 = OI，顏色 = delta_oi")
+        if fig_c:
+            st.plotly_chart(fig_c, use_container_width=True, key="dealer_hist_call")
+        else:
+            st.info("Call 資料不足")
+
+    with col_r:
+        fig_p = _plot_timeline(put_df, "Greens", "🟢 Put 支撐帶（下方） — 氣泡 = OI，顏色 = delta_oi")
+        if fig_p:
+            st.plotly_chart(fig_p, use_container_width=True, key="dealer_hist_put")
+        else:
+            st.info("Put 資料不足")
+
+    # 解讀提示
+    with st.expander("📖 怎麼讀這張圖？"):
+        st.markdown(
+            """
+            - **氣泡大小** = 該履約價的 **未平倉口數**（OI），越大代表賣方防守越重
+            - **顏色深淺** = 當日 **delta_oi**（口數變化），深色=加碼、淺色=平倉
+            - **黃色虛線** = 期貨收盤價軌跡
+            - **水平漂移**：壓力帶連續數日點位不變 → 賣方防守有信心；點位快速上/下移 → 主力認錯或換防
+            - **垂直擴散**：壓力帶與支撐帶價差拉大 → 預期波動上升；收斂 → 結算前 pin 機率上升
+            - **顏色轉變**：連續深色後突然變淺 → 賣方開始獲利了結，可能迎來方向變化
+            """
+        )
+else:
+    st.info("5 日演化資料不足")
+
+st.divider()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SECTION 1: T字報價資金地圖
 # ═══════════════════════════════════════════════════════════════════════════════
 

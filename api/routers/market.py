@@ -180,6 +180,73 @@ def get_dealer_map(
     }
 
 
+@router.get("/dealer-map-history")
+def get_dealer_map_history(
+    days: int = Query(default=5, ge=2, le=20),
+    end_date: Optional[date] = Query(default=None),
+):
+    """
+    莊家地圖 5～20 日時序演化 — 用於觀察賣方壓力/支撐帶的漂移軌跡。
+
+    回傳：每個交易日的 Top OI 履約價（Call/Put 分開），
+    前端可依此繪製「氣泡 timeline」顯示壓力帶隨時間的變化。
+    """
+    if end_date is None:
+        rows = query("SELECT MAX(trade_date) AS d FROM options_strike_avg_cost")
+        end_date = rows[0]["d"] if rows and rows[0]["d"] else date.today() - timedelta(days=1)
+
+    # 抓近 N 個交易日（由資料決定，不用 calendar day）
+    date_rows = query(
+        """
+        SELECT DISTINCT trade_date FROM options_strike_avg_cost
+        WHERE trade_date <= %s
+        ORDER BY trade_date DESC LIMIT %s
+        """,
+        (end_date, days),
+    )
+    dates = [r["trade_date"] for r in date_rows]
+    if not dates:
+        return {"dates": [], "strikes": [], "underlying_by_date": {}}
+
+    start_d = min(dates)
+
+    # 每日的 Call/Put Top 履約價（依 OI 排序取前 10，過濾雜訊）
+    strikes = query(
+        """
+        SELECT trade_date, strike_price, call_put, open_interest, delta_oi, avg_cost
+        FROM options_strike_avg_cost
+        WHERE trade_date BETWEEN %s AND %s
+          AND open_interest > 1000
+        ORDER BY trade_date, open_interest DESC
+        """,
+        (start_d, end_date),
+    )
+
+    # 每日的期貨現價（近月一般盤收盤）
+    fut_rows = query(
+        """
+        SELECT trade_date, close_price
+        FROM tx_futures_daily
+        WHERE trade_date BETWEEN %s AND %s
+          AND session = '一般'
+          AND LENGTH(contract_month) = 6
+          AND contract_month = (
+            SELECT MIN(contract_month) FROM tx_futures_daily f2
+            WHERE f2.trade_date = tx_futures_daily.trade_date
+              AND LENGTH(f2.contract_month) = 6
+          )
+        """,
+        (start_d, end_date),
+    )
+    underlying_by_date = {str(r["trade_date"]): float(r["close_price"]) for r in fut_rows if r.get("close_price")}
+
+    return {
+        "dates": [str(d) for d in sorted(dates)],
+        "strikes": strikes,
+        "underlying_by_date": underlying_by_date,
+    }
+
+
 @router.get("/oi-structure")
 def get_oi_structure(
     start: Optional[date] = Query(default=None),
