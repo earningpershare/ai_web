@@ -278,6 +278,114 @@ def get_seller_pnl(
     }
 
 
+@router.get("/seller-pnl-timeseries")
+def get_seller_pnl_timeseries(
+    days: int = Query(default=7, ge=3, le=30),
+    min_oi: int = Query(default=500, ge=100),
+):
+    """
+    賣方 P&L N 日時序。每日以當日近月期貨收盤結算當日所有 OI >= min_oi 的履約價。
+    - 拆 Call/Put 分別計算
+    - 回傳序列 + summary（趨勢、變動量、盈虧天數）
+    """
+    fut = query(
+        """
+        SELECT trade_date, close_price::FLOAT AS close_price FROM (
+            SELECT trade_date, close_price,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month) AS rn
+            FROM tx_futures_daily
+            WHERE session = '一般' AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        ) t WHERE rn = 1 ORDER BY trade_date
+        """,
+        (days * 2,),
+    )
+    strikes = query(
+        """
+        SELECT trade_date, strike_price, call_put, open_interest, avg_cost
+        FROM options_strike_avg_cost
+        WHERE trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+          AND open_interest >= %s
+          AND avg_cost IS NOT NULL
+        """,
+        (days * 2, min_oi),
+    )
+
+    by_date: dict[str, list[dict]] = {}
+    for s in strikes:
+        by_date.setdefault(str(s["trade_date"]), []).append(s)
+
+    fut_map = {str(r["trade_date"]): r["close_price"] for r in fut}
+
+    series: list[dict] = []
+    for trade_date in sorted(fut_map.keys()):
+        underlying = fut_map.get(trade_date)
+        if underlying is None or trade_date not in by_date:
+            continue
+        call_pnl = put_pnl = call_prem = put_prem = 0.0
+        for s in by_date[trade_date]:
+            strike = float(s["strike_price"])
+            oi = float(s["open_interest"])
+            cost = float(s["avg_cost"])
+            is_call = s["call_put"] in ("C", "Call")
+            intrinsic = max(0.0, underlying - strike) if is_call else max(0.0, strike - underlying)
+            pnl = (cost - intrinsic) * oi
+            prem = cost * oi
+            if is_call:
+                call_pnl += pnl
+                call_prem += prem
+            else:
+                put_pnl += pnl
+                put_prem += prem
+        series.append({
+            "trade_date": trade_date,
+            "underlying": underlying,
+            "call_pnl": call_pnl,
+            "put_pnl": put_pnl,
+            "total_pnl": call_pnl + put_pnl,
+            "call_premium": call_prem,
+            "put_premium": put_prem,
+            "total_premium": call_prem + put_prem,
+        })
+
+    series = series[-days:]
+
+    summary: dict = {}
+    if len(series) >= 2:
+        latest = series[-1]
+        first = series[0]
+        change = latest["total_pnl"] - first["total_pnl"]
+        # 趨勢分類
+        if change > 100_000:
+            trend = "improving"
+        elif change < -100_000:
+            trend = "deteriorating"
+        else:
+            trend = "flat"
+        summary = {
+            "latest_date": latest["trade_date"],
+            "latest_underlying": latest["underlying"],
+            "latest_total_pnl": latest["total_pnl"],
+            "latest_call_pnl": latest["call_pnl"],
+            "latest_put_pnl": latest["put_pnl"],
+            "first_total_pnl": first["total_pnl"],
+            "total_pnl_change": change,
+            "days_profit": sum(1 for s in series if s["total_pnl"] > 0),
+            "days_loss": sum(1 for s in series if s["total_pnl"] < 0),
+            "trend": trend,
+            "min_total_pnl": min(s["total_pnl"] for s in series),
+            "max_total_pnl": max(s["total_pnl"] for s in series),
+        }
+
+    return {
+        "series": series,
+        "summary": summary,
+        "sample_days": len(series),
+        "min_oi": min_oi,
+    }
+
+
 @router.get("/dealer-map-history")
 def get_dealer_map_history(
     days: int = Query(default=5, ge=2, le=20),

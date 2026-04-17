@@ -1330,4 +1330,99 @@ else:
     st.info("法人動能資料不足。")
 
 st.divider()
+
+# ── 賣方 P&L 7 日時序 ─────────────────────────────────────────────────────────
+st.subheader("💰 賣方 P&L 7 日時序")
+st.caption("每日以近月期貨收盤結算當日所有 OI≥500 的履約價，累積壓力變化；賣方帳面虧損擴大常觸發避險回補。")
+
+try:
+    _sp_resp = requests.get(f"{API_URL}/market/seller-pnl-timeseries", params={"days": 7, "min_oi": 500}, timeout=15)
+    _sp_resp.raise_for_status()
+    _sp_data = _sp_resp.json()
+except Exception as e:
+    st.error(f"賣方 P&L 時序 API 錯誤：{e}")
+    _sp_data = {}
+
+_sp_series = _sp_data.get("series") or []
+_sp_summary = _sp_data.get("summary") or {}
+
+if _sp_series and _sp_summary:
+    _trend_map = {
+        "improving": ("📈 賣方壓力紓解", "#26A69A"),
+        "deteriorating": ("⚠️ 賣方壓力加劇", "#EF5350"),
+        "flat": ("⚪ 持平", "#9E9E9E"),
+    }
+    _tlabel, _tcolor = _trend_map.get(_sp_summary.get("trend"), ("—", "#9E9E9E"))
+
+    kc1, kc2, kc3, kc4 = st.columns(4)
+    _latest_total = _sp_summary.get("latest_total_pnl", 0) or 0
+    _change = _sp_summary.get("total_pnl_change", 0) or 0
+    _latest_call = _sp_summary.get("latest_call_pnl", 0) or 0
+    _latest_put = _sp_summary.get("latest_put_pnl", 0) or 0
+    kc1.metric("最新日總 P&L", f"{_latest_total:+,.0f}", help="當日賣方未實現損益（元 × 口）")
+    kc2.metric("7 日變動", f"{_change:+,.0f}", delta=f"{'改善' if _change > 0 else '惡化' if _change < 0 else '持平'}")
+    kc3.metric("Call 賣方 P&L", f"{_latest_call:+,.0f}")
+    kc4.metric("Put 賣方 P&L", f"{_latest_put:+,.0f}")
+
+    # 狀態卡
+    _dp = _sp_summary.get("days_profit", 0) or 0
+    _dl = _sp_summary.get("days_loss", 0) or 0
+    st.markdown(
+        f"""
+        <div style="padding:14px; border-radius:8px; border-left:5px solid {_tcolor}; background:rgba(255,255,255,0.03); margin:10px 0;">
+          <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">7 日趨勢判讀</div>
+          <div style="font-size:16px; color:{_tcolor}; font-weight:600;">{_tlabel}</div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:6px;">
+            盈利天數：<b style="color:#26A69A;">{_dp}</b> / 虧損天數：<b style="color:#EF5350;">{_dl}</b>
+            &nbsp;|&nbsp; 區間最低：{_sp_summary.get('min_total_pnl', 0):+,.0f} / 最高：{_sp_summary.get('max_total_pnl', 0):+,.0f}
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # P&L 時序圖（雙軸：P&L bar + underlying line）
+    from plotly.subplots import make_subplots
+    _fig_sp = make_subplots(specs=[[{"secondary_y": True}]])
+    _dates = [s["trade_date"] for s in _sp_series]
+    _total = [s["total_pnl"] for s in _sp_series]
+    _under = [s["underlying"] for s in _sp_series]
+    _bar_colors = ["#26A69A" if v >= 0 else "#EF5350" for v in _total]
+    _fig_sp.add_trace(
+        go.Bar(x=_dates, y=_total, name="賣方總 P&L", marker_color=_bar_colors, opacity=0.75),
+        secondary_y=False,
+    )
+    _fig_sp.add_trace(
+        go.Scatter(x=_dates, y=_under, name="近月期貨收盤", mode="lines+markers",
+                   line=dict(color="#FFB300", width=2), marker=dict(size=7)),
+        secondary_y=True,
+    )
+    _fig_sp.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.7, secondary_y=False)
+    _fig_sp.update_layout(
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    _fig_sp.update_yaxes(title_text="賣方總 P&L（元）", gridcolor="rgba(128,128,128,0.2)", secondary_y=False)
+    _fig_sp.update_yaxes(title_text="近月期貨", gridcolor="rgba(128,128,128,0.15)", secondary_y=True)
+    st.plotly_chart(_fig_sp, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **賣方 P&L**：每口 = avg_cost − max(0, 現價−履約價)（Call）或 max(0, 履約價−現價)（Put），× OI。
+            - **壓力紓解（improving）**：7 日內 P&L 上升 >10 萬，代表標的走向對賣方有利區間（大多處 OTM），選擇權時間價值正在 decay。
+            - **壓力加劇（deteriorating）**：7 日內 P&L 下降 >10 萬，代表大量 OI 被推向 ITM；常見情境是趨勢突破關鍵點位，賣方需回補期貨避險 → 助漲助跌（gamma squeeze）。
+            - **與莊家地圖配合**：若 P&L 惡化且莊家地圖顯示壓力帶被擊穿，是**趨勢續航**的強訊號。
+            """
+        )
+else:
+    st.info("賣方 P&L 時序資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
