@@ -278,6 +278,113 @@ def get_seller_pnl(
     }
 
 
+@router.get("/night-gap-history")
+def get_night_gap_history(days: int = Query(default=10, ge=5, le=60)):
+    """
+    夜盤 N 日缺口時序（日盤收盤 → 夜盤收盤）。
+    - 取 contract_code='TX'、LENGTH(contract_month)=6、每日最小 contract_month（近月）
+    - 日盤（一般） / 夜盤（盤後）兩個 session 各取近月收盤
+    - gap = night_close - day_close
+    - 統計：正/負缺口天數、平均缺口、趨勢、夜盤強度分類
+    """
+    rows = query(
+        """
+        WITH day_ranked AS (
+            SELECT trade_date, contract_month, close_price,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month) AS rn
+            FROM tx_futures_daily
+            WHERE contract_code = 'TX' AND session = '一般'
+              AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        ),
+        night_ranked AS (
+            SELECT trade_date, contract_month, close_price, volume,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month) AS rn
+            FROM tx_futures_daily
+            WHERE contract_code = 'TX' AND session = '盤後'
+              AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        )
+        SELECT d.trade_date,
+               d.close_price::FLOAT AS day_close,
+               n.close_price::FLOAT AS night_close,
+               n.volume::BIGINT      AS night_volume
+        FROM day_ranked d
+        LEFT JOIN night_ranked n ON d.trade_date = n.trade_date AND n.rn = 1
+        WHERE d.rn = 1
+        ORDER BY d.trade_date
+        """,
+        (days * 2, days * 2),
+    )
+
+    series: list[dict] = []
+    for r in rows:
+        dc = r.get("day_close")
+        nc = r.get("night_close")
+        gap = None
+        gap_pct = None
+        if dc is not None and nc is not None:
+            gap = nc - dc
+            gap_pct = (gap / dc * 100.0) if dc else None
+        series.append({
+            "trade_date": str(r["trade_date"]),
+            "day_close": dc,
+            "night_close": nc,
+            "night_volume": int(r["night_volume"]) if r.get("night_volume") is not None else None,
+            "gap": gap,
+            "gap_pct": gap_pct,
+        })
+
+    # 僅保留同時有日盤 + 夜盤的天數；取最後 N 日
+    valid = [s for s in series if s["gap"] is not None]
+    valid = valid[-days:]
+
+    summary: dict = {}
+    if len(valid) >= 2:
+        gaps = [s["gap"] for s in valid]
+        pos = sum(1 for g in gaps if g > 0)
+        neg = sum(1 for g in gaps if g < 0)
+        zero = len(gaps) - pos - neg
+        avg_gap = sum(gaps) / len(gaps)
+        avg_abs_gap = sum(abs(g) for g in gaps) / len(gaps)
+        sum_gap = sum(gaps)
+
+        # 夜盤強度分類：以近 N 日缺口總合 / avg_abs_gap 做標準化
+        if avg_abs_gap > 0:
+            strength_ratio = sum_gap / (avg_abs_gap * len(gaps))
+        else:
+            strength_ratio = 0.0
+        if strength_ratio > 0.4:
+            bias = "night_bullish_persistent"
+        elif strength_ratio < -0.4:
+            bias = "night_bearish_persistent"
+        elif pos >= neg * 2:
+            bias = "night_bullish_mild"
+        elif neg >= pos * 2:
+            bias = "night_bearish_mild"
+        else:
+            bias = "neutral"
+
+        summary = {
+            "latest_date": valid[-1]["trade_date"],
+            "latest_gap": valid[-1]["gap"],
+            "latest_gap_pct": valid[-1]["gap_pct"],
+            "latest_night_volume": valid[-1]["night_volume"],
+            "days_positive": pos,
+            "days_negative": neg,
+            "days_zero": zero,
+            "avg_gap": avg_gap,
+            "avg_abs_gap": avg_abs_gap,
+            "sum_gap": sum_gap,
+            "strength_ratio": strength_ratio,
+            "bias": bias,
+        }
+
+    return {"series": valid, "summary": summary, "sample_days": len(valid)}
+
+
 @router.get("/seller-pnl-timeseries")
 def get_seller_pnl_timeseries(
     days: int = Query(default=7, ge=3, le=30),

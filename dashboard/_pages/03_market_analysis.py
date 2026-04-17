@@ -1425,4 +1425,115 @@ else:
     st.info("賣方 P&L 時序資料不足。")
 
 st.divider()
+
+# ── 夜盤 10 日缺口歷史 ────────────────────────────────────────────────────────
+st.subheader("🌙 夜盤 10 日缺口歷史")
+st.caption("每日『日盤收盤 → 夜盤收盤』缺口時序；連續同向缺口代表國際資金方向明確。")
+
+try:
+    _ng_resp = requests.get(f"{API_URL}/market/night-gap-history", params={"days": 10}, timeout=15)
+    _ng_resp.raise_for_status()
+    _ng_data = _ng_resp.json()
+except Exception as e:
+    st.error(f"夜盤缺口 API 錯誤：{e}")
+    _ng_data = {}
+
+_ng_series = _ng_data.get("series") or []
+_ng_summary = _ng_data.get("summary") or {}
+
+if _ng_series and _ng_summary:
+    _bias_map = {
+        "night_bullish_persistent": ("🚀 夜盤持續偏多", "#26A69A"),
+        "night_bearish_persistent": ("🔻 夜盤持續偏空", "#EF5350"),
+        "night_bullish_mild": ("📈 夜盤偏多傾向", "#66BB6A"),
+        "night_bearish_mild": ("📉 夜盤偏空傾向", "#E57373"),
+        "neutral": ("⚪ 中性震盪", "#9E9E9E"),
+    }
+    _blabel, _bcolor = _bias_map.get(_ng_summary.get("bias"), ("—", "#9E9E9E"))
+
+    nc1, nc2, nc3, nc4 = st.columns(4)
+    _latest_gap = _ng_summary.get("latest_gap", 0) or 0
+    _latest_gap_pct = _ng_summary.get("latest_gap_pct", 0) or 0
+    _avg_gap = _ng_summary.get("avg_gap", 0) or 0
+    _sum_gap = _ng_summary.get("sum_gap", 0) or 0
+    nc1.metric("最新日缺口", f"{_latest_gap:+.0f} 點", delta=f"{_latest_gap_pct:+.2f}%")
+    nc2.metric("10 日平均缺口", f"{_avg_gap:+.1f} 點")
+    nc3.metric("10 日累計缺口", f"{_sum_gap:+.0f} 點")
+    nc4.metric("夜盤成交量", f"{_ng_summary.get('latest_night_volume', 0):,}")
+
+    # bias 狀態卡
+    _dp = _ng_summary.get("days_positive", 0) or 0
+    _dn = _ng_summary.get("days_negative", 0) or 0
+    _dz = _ng_summary.get("days_zero", 0) or 0
+    _strength = _ng_summary.get("strength_ratio", 0) or 0
+    st.markdown(
+        f"""
+        <div style="padding:14px; border-radius:8px; border-left:5px solid {_bcolor}; background:rgba(255,255,255,0.03); margin:10px 0;">
+          <div style="font-size:12px; color:#9E9E9E; margin-bottom:4px;">10 日夜盤傾向</div>
+          <div style="font-size:16px; color:{_bcolor}; font-weight:600;">{_blabel}</div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:6px;">
+            正缺口：<b style="color:#26A69A;">{_dp}</b> 日 /
+            負缺口：<b style="color:#EF5350;">{_dn}</b> 日 /
+            持平：<b>{_dz}</b> 日
+            &nbsp;|&nbsp; 強度比率：<b style="color:{_bcolor};">{_strength:+.2f}</b>
+            <span style="color:#888">（>0.4 / <-0.4 為持續性偏向）</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 缺口柱狀圖 + 日盤收盤 / 夜盤收盤線
+    from plotly.subplots import make_subplots
+    _fig_ng = make_subplots(specs=[[{"secondary_y": True}]])
+    _dates = [s["trade_date"] for s in _ng_series]
+    _gaps = [s["gap"] for s in _ng_series]
+    _day_cls = [s["day_close"] for s in _ng_series]
+    _night_cls = [s["night_close"] for s in _ng_series]
+    _bar_colors = ["#26A69A" if g >= 0 else "#EF5350" for g in _gaps]
+    _fig_ng.add_trace(
+        go.Bar(x=_dates, y=_gaps, name="夜盤缺口", marker_color=_bar_colors, opacity=0.75),
+        secondary_y=False,
+    )
+    _fig_ng.add_trace(
+        go.Scatter(x=_dates, y=_day_cls, name="日盤收", mode="lines+markers",
+                   line=dict(color="#FFB300", width=2), marker=dict(size=6)),
+        secondary_y=True,
+    )
+    _fig_ng.add_trace(
+        go.Scatter(x=_dates, y=_night_cls, name="夜盤收", mode="lines+markers",
+                   line=dict(color="#AB47BC", width=2, dash="dash"), marker=dict(size=6)),
+        secondary_y=True,
+    )
+    _fig_ng.add_hline(y=0, line_dash="dot", line_color="#888", opacity=0.7, secondary_y=False)
+    _fig_ng.update_layout(
+        height=380,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+        hovermode="x unified",
+    )
+    _fig_ng.update_yaxes(title_text="缺口（點）", gridcolor="rgba(128,128,128,0.2)", secondary_y=False)
+    _fig_ng.update_yaxes(title_text="收盤價", gridcolor="rgba(128,128,128,0.15)", secondary_y=True)
+    st.plotly_chart(_fig_ng, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **缺口定義**：夜盤收盤 − 日盤收盤（同一交易日）。正值 = 夜盤往上；負值 = 夜盤往下。
+            - **夜盤解讀**：夜盤反映國際盤（美股、原油、美債殖利率）對台指的拉扯。連續數日同向 = 外圍資金方向一致。
+            - **分類依據**（strength_ratio = sum_gap / (avg_abs_gap × N)）：
+              - \\|ratio\\| > 0.4：持續性偏多/偏空（夜盤形成 persistent bias）
+              - 正/負缺口日數 2:1 以上：mild bias
+              - 其他：中性震盪（夜盤來回）
+            - **交易意涵**：夜盤持續偏多 → 隔日日盤開盤常伴 gap-up；持續偏空反之。若與三大法人動能（Round 11）同向，訊號強度更大。
+            """
+        )
+else:
+    st.info("夜盤缺口資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
