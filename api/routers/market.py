@@ -305,7 +305,8 @@ def get_max_pain_history(days: int = Query(default=20, ge=10, le=90)):
     for r in rows:
         mp = r["max_pain"]
         und = r["underlying"]
-        delta = r["delta_pts"]
+        # 覆寫：本端點統一採「現價 - 痛點」語意（正 = 價格在痛點上方）
+        delta = (und - mp) if (und is not None and mp is not None) else None
         delta_pct = (delta / und * 100.0) if (delta is not None and und) else None
         series.append({
             "trade_date": str(r["trade_date"]),
