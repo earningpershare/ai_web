@@ -465,6 +465,113 @@ def get_night_session(
     }
 
 
+@router.get("/institutional-divergence")
+def get_institutional_divergence(
+    days: int = Query(default=30, ge=10, le=120),
+):
+    """
+    法人 net_oi 30 日時序 vs 指數（近月 TX 收盤）走勢 + 背離偵測。
+    背離邏輯：取前後 5 日平均變化方向；若方向相反則為背離。
+    - index 上升 + 外資 net_oi 下降 = bearish divergence（負背離，派發）
+    - index 下降 + 外資 net_oi 上升 = bullish divergence（正背離，接盤）
+    - 同向 / 平盤 = neutral
+    """
+    # 指數近月 TX 收盤（session='一般'，取每日最小 contract_month）
+    idx_rows = query(
+        """
+        WITH ranked AS (
+            SELECT trade_date, contract_month, close_price,
+                   ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY contract_month ASC) AS rn
+            FROM tx_futures_daily
+            WHERE contract_code = 'TX' AND session = '一般'
+              AND LENGTH(contract_month) = 6
+              AND close_price IS NOT NULL
+              AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        )
+        SELECT trade_date, close_price::FLOAT AS close
+        FROM ranked WHERE rn = 1
+        ORDER BY trade_date
+        """,
+        (days * 2,),  # 多查一點以防假日間隔
+    )
+    # 法人 net_oi（臺股期貨）
+    inst_rows = query(
+        """
+        SELECT trade_date, institution_type, net_oi
+        FROM institutional_futures
+        WHERE contract_code = '臺股期貨'
+          AND trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+        ORDER BY trade_date
+        """,
+        (days * 2,),
+    )
+
+    # 以指數可用日期為基準，對齊法人資料
+    idx_by_date = {str(r["trade_date"]): r["close"] for r in idx_rows}
+    inst_by_date: dict[str, dict] = {}
+    for r in inst_rows:
+        d = str(r["trade_date"])
+        bucket = inst_by_date.setdefault(d, {})
+        bucket[r["institution_type"]] = int(r["net_oi"]) if r["net_oi"] is not None else None
+
+    # 保留同時有指數 + 三法人資料的日期；取最後 N 日
+    common_dates = sorted([d for d in idx_by_date if d in inst_by_date])
+    common_dates = common_dates[-days:]
+
+    series = []
+    for d in common_dates:
+        inst = inst_by_date.get(d, {})
+        series.append({
+            "trade_date": d,
+            "index_close": idx_by_date.get(d),
+            "foreign_net_oi": inst.get("外資及陸資"),
+            "trust_net_oi": inst.get("投信"),
+            "dealer_net_oi": inst.get("自營商"),
+        })
+
+    def _divergence(first_half_avg, second_half_avg, first_idx, second_idx):
+        if first_half_avg is None or second_half_avg is None or first_idx is None or second_idx is None:
+            return "insufficient_data", 0.0
+        inst_delta = second_half_avg - first_half_avg
+        idx_delta = second_idx - first_idx
+        if abs(inst_delta) < 1 or abs(idx_delta) < 1:
+            return "neutral", 0.0
+        if idx_delta > 0 and inst_delta < 0:
+            return "bearish", abs(inst_delta)  # 指數升、法人減 = 派發
+        if idx_delta < 0 and inst_delta > 0:
+            return "bullish", abs(inst_delta)  # 指數跌、法人加 = 接盤
+        return "neutral", 0.0
+
+    # 前 5 日 vs 後 5 日（若樣本夠）
+    divergence = {}
+    if len(series) >= 10:
+        first5 = series[:5]
+        last5 = series[-5:]
+        idx_first = sum(r["index_close"] for r in first5 if r["index_close"] is not None) / 5
+        idx_last = sum(r["index_close"] for r in last5 if r["index_close"] is not None) / 5
+        for key, label in [("foreign_net_oi", "foreign"), ("trust_net_oi", "trust"), ("dealer_net_oi", "dealer")]:
+            vals_f = [r[key] for r in first5 if r[key] is not None]
+            vals_l = [r[key] for r in last5 if r[key] is not None]
+            if vals_f and vals_l:
+                fa = sum(vals_f) / len(vals_f)
+                la = sum(vals_l) / len(vals_l)
+                state, mag = _divergence(fa, la, idx_first, idx_last)
+                divergence[label] = {
+                    "state": state,
+                    "first5_avg_net_oi": fa,
+                    "last5_avg_net_oi": la,
+                    "inst_delta": la - fa,
+                    "magnitude": mag,
+                }
+        divergence["_index"] = {"first5_avg": idx_first, "last5_avg": idx_last, "idx_delta": idx_last - idx_first}
+
+    return {
+        "series": series,
+        "divergence": divergence,
+        "sample_days": len(series),
+    }
+
+
 @router.get("/calendar-spread")
 def get_calendar_spread(
     days: int = Query(default=30, ge=5, le=180),

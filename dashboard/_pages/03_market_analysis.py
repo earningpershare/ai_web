@@ -906,4 +906,101 @@ else:
     st.info("跨期價差資料不足（需至少兩個近月合約同時有成交），等 TAIFEX 次月合約流動性累積後顯示。")
 
 st.divider()
+
+# ── 法人 net_oi vs 指數 背離偵測 ───────────────────────────────────────────────
+st.subheader("🔀 法人 Delta 趨勢 — 外資 vs 指數 背離偵測")
+st.caption("外資 / 投信 / 自營商 臺股期貨淨未平倉 (net_oi) 30 日時序；與近月 TX 收盤對比，偵測前後 5 日平均走勢的方向背離")
+
+try:
+    _div_resp = requests.get(f"{API_URL}/market/institutional-divergence", params={"days": 30}, timeout=15)
+    _div_resp.raise_for_status()
+    _div_data = _div_resp.json()
+except Exception as e:
+    st.error(f"法人背離 API 錯誤：{e}")
+    _div_data = {}
+
+_div_series = _div_data.get("series") or []
+_div_info = _div_data.get("divergence") or {}
+
+if _div_series and _div_info:
+    _state_map = {
+        "bearish": ("⚠️ 負背離（派發）", "#EF5350"),
+        "bullish": ("🟢 正背離（接盤）", "#66BB6A"),
+        "neutral": ("—", "#888"),
+        "insufficient_data": ("資料不足", "#888"),
+    }
+    _kc1, _kc2, _kc3 = st.columns(3)
+    for _col, _key, _label in [(_kc1, "foreign", "外資"), (_kc2, "trust", "投信"), (_kc3, "dealer", "自營商")]:
+        _info = _div_info.get(_key) or {}
+        _state = _info.get("state", "neutral")
+        _lbl, _clr = _state_map.get(_state, ("—", "#888"))
+        _delta_inst = _info.get("inst_delta") or 0
+        _col.markdown(
+            f"""
+            <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:4px solid {_clr}">
+              <div style="color:#888;font-size:12px">{_label} 背離狀態</div>
+              <div style="color:{_clr};font-size:16px;font-weight:600;margin:4px 0">{_lbl}</div>
+              <div style="color:#E0E0E0;font-size:12px">淨部位變化：{_delta_inst:+,.0f} 口</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    _df_d = pd.DataFrame(_div_series)
+    _df_d["trade_date"] = pd.to_datetime(_df_d["trade_date"])
+
+    _fig_d = make_subplots(specs=[[{"secondary_y": True}]])
+    _fig_d.add_trace(
+        go.Scatter(x=_df_d["trade_date"], y=_df_d["index_close"], name="近月 TX 收盤",
+                   line=dict(color="#FFD54F", width=2),
+                   hovertemplate="%{x|%Y-%m-%d}<br>指數 %{y:,.0f}<extra></extra>"),
+        secondary_y=False,
+    )
+    _fig_d.add_trace(
+        go.Scatter(x=_df_d["trade_date"], y=_df_d["foreign_net_oi"], name="外資 net_oi",
+                   line=dict(color="#4FC3F7", width=2),
+                   hovertemplate="%{x|%Y-%m-%d}<br>外資 %{y:+,.0f}<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_d.add_trace(
+        go.Scatter(x=_df_d["trade_date"], y=_df_d["trust_net_oi"], name="投信 net_oi",
+                   line=dict(color="#BA68C8", width=1.5, dash="dot"),
+                   hovertemplate="%{x|%Y-%m-%d}<br>投信 %{y:+,.0f}<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_d.add_trace(
+        go.Scatter(x=_df_d["trade_date"], y=_df_d["dealer_net_oi"], name="自營商 net_oi",
+                   line=dict(color="#66BB6A", width=1.5, dash="dash"),
+                   hovertemplate="%{x|%Y-%m-%d}<br>自營 %{y:+,.0f}<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_d.update_layout(
+        title=dict(text="30 日指數 vs 三大法人淨未平倉", font=dict(size=14, color="#E0E0E0")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        height=400,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.08),
+        margin=dict(l=40, r=40, t=50, b=40),
+    )
+    _fig_d.update_xaxes(title="交易日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)")
+    _fig_d.update_yaxes(title="近月 TX 收盤（點）", secondary_y=False, color="#FFD54F", gridcolor="rgba(255,255,255,0.1)")
+    _fig_d.update_yaxes(title="法人 net_oi（口）", secondary_y=True, color="#E0E0E0", zerolinecolor="rgba(255,255,255,0.3)", showgrid=False)
+
+    st.plotly_chart(_fig_d, use_container_width=True, key="inst_divergence_chart")
+
+    with st.expander("📖 如何解讀法人背離？"):
+        st.markdown(
+            """
+            - **負背離（bearish）**：指數近 5 日均值 > 前 5 日均值，但法人 net_oi 反而下降 → 上漲是散戶/程式盤推動，法人在派發，常預示反轉。
+            - **正背離（bullish）**：指數下跌但法人 net_oi 增加 → 法人在接盤，常是底部訊號。
+            - **注意**：此為方向性警示，非 100% 準確；外資資金流是最重要但非唯一訊號，需搭配 put/call ratio、結算日位置共同判讀。
+            - **資料來源**：臺股期貨（大台）三大法人每日淨未平倉；指數以近月 TX 收盤為 proxy。
+            """
+        )
+else:
+    st.info("法人背離資料不足，需至少 10 個交易日的完整資料。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
