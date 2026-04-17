@@ -1647,6 +1647,161 @@ def get_settlement_history(
     }
 
 
+@router.get("/seller-exposure-bucketed")
+def get_seller_exposure_bucketed():
+    """
+    賣方 ATM/OTM 分層壓力 — 近月月選當日依 moneyness 分五格匯總 Call/Put 賣方敞口。
+    - 分格：deep_itm (|m|>=3% ITM) / itm / atm (|m|<0.5%) / otm / deep_otm
+    - 每格：total_oi、sum_premium_received (OI×avg_cost)、sum_mark_cost (OI×daily_price)、unrealized_pnl_points
+    - 一單位 P&L = (avg_cost - daily_price)，× 50 元/點 為實際金額
+    """
+    # 取最新交易日
+    latest = query(
+        "SELECT MAX(trade_date) AS d FROM options_strike_avg_cost",
+        (),
+    )
+    if not latest or not latest[0].get("d"):
+        return {"error": "no_data"}
+    td = latest[0]["d"]
+
+    # 找近月月選（LENGTH=6，最高 OI 者）
+    near = query(
+        """
+        SELECT contract_month, SUM(open_interest) AS tot_oi
+        FROM options_strike_avg_cost
+        WHERE trade_date = %s AND LENGTH(contract_month) = 6
+        GROUP BY contract_month
+        ORDER BY tot_oi DESC
+        LIMIT 1
+        """,
+        (td,),
+    )
+    if not near:
+        return {"error": "no_monthly_contract"}
+    contract_month = near[0]["contract_month"]
+
+    # 取該日期貨近月收盤作為 spot
+    fut = query(
+        """
+        SELECT close_price FROM tx_futures_daily
+        WHERE trade_date = %s AND session = '一般' AND contract_code = 'TX'
+          AND LENGTH(contract_month) = 6
+        ORDER BY volume DESC NULLS LAST
+        LIMIT 1
+        """,
+        (td,),
+    )
+    if not fut or not fut[0].get("close_price"):
+        return {"error": "no_spot"}
+    spot = float(fut[0]["close_price"])
+
+    # 拿所有該月合約的 strike + OI + avg_cost + daily_price
+    rows = query(
+        """
+        SELECT strike_price, call_put, open_interest, avg_cost, daily_price
+        FROM options_strike_avg_cost
+        WHERE trade_date = %s AND contract_month = %s
+          AND open_interest > 0
+        """,
+        (td, contract_month),
+    )
+    if not rows:
+        return {"error": "no_options_data"}
+
+    bucket_order = ["deep_itm", "itm", "atm", "otm", "deep_otm"]
+    # 初始化容器
+    def _empty():
+        return {
+            "total_oi": 0,
+            "sum_premium_received": 0.0,
+            "sum_mark_cost": 0.0,
+            "unrealized_pnl_points": 0.0,
+            "strikes_count": 0,
+        }
+    buckets = {b: {"call": _empty(), "put": _empty()} for b in bucket_order}
+
+    for r in rows:
+        strike = float(r["strike_price"])
+        cp = r["call_put"]
+        oi = int(r["open_interest"]) if r["open_interest"] else 0
+        avg_cost = float(r["avg_cost"]) if r["avg_cost"] is not None else None
+        daily_px = float(r["daily_price"]) if r["daily_price"] is not None else None
+        if oi <= 0 or avg_cost is None or daily_px is None:
+            continue
+
+        m_pct = (strike - spot) / spot * 100.0 if spot else 0.0
+        abs_m = abs(m_pct)
+
+        # 決定 ITM/OTM
+        if cp == "C":
+            itm = strike < spot
+        else:
+            itm = strike > spot
+
+        if abs_m < 0.5:
+            bucket = "atm"
+        elif abs_m < 3.0:
+            bucket = "itm" if itm else "otm"
+        else:
+            bucket = "deep_itm" if itm else "deep_otm"
+
+        side = "call" if cp == "C" else "put"
+        b = buckets[bucket][side]
+        b["total_oi"] += oi
+        b["sum_premium_received"] += oi * avg_cost
+        b["sum_mark_cost"] += oi * daily_px
+        b["unrealized_pnl_points"] += oi * (avg_cost - daily_px)
+        b["strikes_count"] += 1
+
+    # 匯總 + 四捨五入
+    result_buckets = []
+    totals = {"call_oi": 0, "put_oi": 0, "call_pnl": 0.0, "put_pnl": 0.0}
+    for b in bucket_order:
+        call = buckets[b]["call"]
+        put = buckets[b]["put"]
+        for d in (call, put):
+            d["sum_premium_received"] = round(d["sum_premium_received"], 0)
+            d["sum_mark_cost"] = round(d["sum_mark_cost"], 0)
+            d["unrealized_pnl_points"] = round(d["unrealized_pnl_points"], 0)
+        totals["call_oi"] += call["total_oi"]
+        totals["put_oi"] += put["total_oi"]
+        totals["call_pnl"] += call["unrealized_pnl_points"]
+        totals["put_pnl"] += put["unrealized_pnl_points"]
+        result_buckets.append({
+            "bucket": b,
+            "call": call,
+            "put": put,
+        })
+
+    # 判讀：哪格 P&L 最差（賣方最痛），哪格 OI 最大
+    worst_call = min(result_buckets, key=lambda x: x["call"]["unrealized_pnl_points"])
+    worst_put = min(result_buckets, key=lambda x: x["put"]["unrealized_pnl_points"])
+    max_oi_call = max(result_buckets, key=lambda x: x["call"]["total_oi"])
+    max_oi_put = max(result_buckets, key=lambda x: x["put"]["total_oi"])
+
+    return {
+        "trade_date": str(td),
+        "contract_month": contract_month,
+        "spot": spot,
+        "buckets": result_buckets,
+        "totals": {
+            "call_oi": totals["call_oi"],
+            "put_oi": totals["put_oi"],
+            "call_pnl_points": round(totals["call_pnl"], 0),
+            "put_pnl_points": round(totals["put_pnl"], 0),
+            "net_pnl_points": round(totals["call_pnl"] + totals["put_pnl"], 0),
+        },
+        "highlights": {
+            "worst_call_bucket": worst_call["bucket"],
+            "worst_call_pnl": worst_call["call"]["unrealized_pnl_points"],
+            "worst_put_bucket": worst_put["bucket"],
+            "worst_put_pnl": worst_put["put"]["unrealized_pnl_points"],
+            "max_oi_call_bucket": max_oi_call["bucket"],
+            "max_oi_put_bucket": max_oi_put["bucket"],
+        },
+    }
+
+
 @router.get("/futures-oi-momentum")
 def get_futures_oi_momentum(
     days: int = Query(default=10, ge=5, le=30),

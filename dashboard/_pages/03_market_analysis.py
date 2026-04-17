@@ -2105,4 +2105,148 @@ else:
     st.info("期貨 OI 動能資料不足（需要至少 2 日）。")
 
 st.divider()
+
+# ── 賣方 ATM/OTM 分層壓力（moneyness bucketed） ──────────────────────────────
+st.subheader("🧮 賣方 ATM/OTM 分層壓力")
+st.caption("近月月選依 moneyness 分五格；顯示 Call/Put 賣方各格 OI 與未實現 P&L（點數）。")
+
+try:
+    _sb_resp = requests.get(f"{API_URL}/market/seller-exposure-bucketed", timeout=15)
+    _sb_resp.raise_for_status()
+    _sb_data = _sb_resp.json()
+except Exception as e:
+    st.error(f"賣方分層 API 錯誤：{e}")
+    _sb_data = {}
+
+_sb_buckets = _sb_data.get("buckets") or []
+_sb_totals = _sb_data.get("totals") or {}
+_sb_hi = _sb_data.get("highlights") or {}
+
+if _sb_buckets and _sb_totals:
+    st.caption(
+        f"交易日：**{_sb_data.get('trade_date', '—')}**"
+        f"  |  合約月份：**{_sb_data.get('contract_month', '—')}**"
+        f"  |  現價：**{_sb_data.get('spot', 0):.0f}**"
+    )
+
+    # KPIs
+    kb1, kb2, kb3, kb4 = st.columns(4)
+    _call_pnl = _sb_totals.get("call_pnl_points", 0) or 0
+    _put_pnl = _sb_totals.get("put_pnl_points", 0) or 0
+    _net_pnl = _sb_totals.get("net_pnl_points", 0) or 0
+    kb1.metric("Call 賣方總 P&L", f"{_call_pnl:+,.0f} 點")
+    kb2.metric("Put 賣方總 P&L", f"{_put_pnl:+,.0f} 點")
+    kb3.metric("全體賣方淨 P&L", f"{_net_pnl:+,.0f} 點", f"≈ {_net_pnl*50/10000:+.1f} 萬元")
+    _worst_call = _sb_hi.get("worst_call_bucket", "—")
+    _worst_put = _sb_hi.get("worst_put_bucket", "—")
+    kb4.metric("最痛格（Call/Put）", f"{_worst_call} / {_worst_put}")
+
+    # 狀態卡
+    _color = "#26A69A" if _net_pnl >= 0 else "#EF5350"
+    _verdict = "✅ 賣方整體獲利" if _net_pnl >= 0 else "⚠️ 賣方整體虧損"
+    st.markdown(
+        f"""
+        <div style="border-left:4px solid {_color}; background:rgba(128,128,128,0.08);
+                    padding:10px 14px; margin:8px 0; border-radius:4px;">
+          <div style="font-size:14px; color:#E0E0E0;">
+            <strong>{_verdict}</strong>
+            <span style="color:#BDBDBD;"> — 淨 P&L {_net_pnl:+,.0f} 點（≈ {_net_pnl*50/10000:+.1f} 萬元，每點 NTD 50）。</span>
+          </div>
+          <div style="font-size:13px; color:#BDBDBD; margin-top:4px;">
+            Call 最痛格：<b>{_worst_call}</b>（{_sb_hi.get('worst_call_pnl', 0):+,.0f} 點）&nbsp;|&nbsp;
+            Put 最痛格：<b>{_worst_put}</b>（{_sb_hi.get('worst_put_pnl', 0):+,.0f} 點）&nbsp;|&nbsp;
+            Call 最大 OI 格：<b>{_sb_hi.get('max_oi_call_bucket', '—')}</b>&nbsp;|&nbsp;
+            Put 最大 OI 格：<b>{_sb_hi.get('max_oi_put_bucket', '—')}</b>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 水平分組柱狀圖
+    _bucket_labels = {
+        "deep_itm": "深度 ITM (|m|≥3%)",
+        "itm": "ITM (0.5%~3%)",
+        "atm": "ATM (|m|<0.5%)",
+        "otm": "OTM (0.5%~3%)",
+        "deep_otm": "深度 OTM (|m|≥3%)",
+    }
+    _bucket_order = ["deep_itm", "itm", "atm", "otm", "deep_otm"]
+    _ys = [_bucket_labels[b] for b in _bucket_order]
+    _bm = {x["bucket"]: x for x in _sb_buckets}
+
+    # P&L 水平雙向圖
+    _call_pnls = [_bm.get(b, {}).get("call", {}).get("unrealized_pnl_points", 0) for b in _bucket_order]
+    _put_pnls = [_bm.get(b, {}).get("put", {}).get("unrealized_pnl_points", 0) for b in _bucket_order]
+    _fig_pnl = go.Figure()
+    _fig_pnl.add_trace(
+        go.Bar(y=_ys, x=_call_pnls, name="Call 賣方 P&L",
+               orientation="h", marker_color="#42A5F5", opacity=0.85,
+               text=[f"{v:+,.0f}" for v in _call_pnls], textposition="auto")
+    )
+    _fig_pnl.add_trace(
+        go.Bar(y=_ys, x=_put_pnls, name="Put 賣方 P&L",
+               orientation="h", marker_color="#EF5350", opacity=0.85,
+               text=[f"{v:+,.0f}" for v in _put_pnls], textposition="auto")
+    )
+    _fig_pnl.add_vline(x=0, line_dash="dot", line_color="#888", opacity=0.7)
+    _fig_pnl.update_layout(
+        height=360,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        barmode="group",
+        title=dict(text="賣方未實現 P&L（點數；正值=獲利，負值=虧損）", font=dict(color="#E0E0E0", size=14)),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="P&L（點）"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+    )
+    st.plotly_chart(_fig_pnl, use_container_width=True)
+
+    # OI 分布橫桿
+    _call_ois = [_bm.get(b, {}).get("call", {}).get("total_oi", 0) for b in _bucket_order]
+    _put_ois = [_bm.get(b, {}).get("put", {}).get("total_oi", 0) for b in _bucket_order]
+    _fig_oi = go.Figure()
+    _fig_oi.add_trace(go.Bar(y=_ys, x=_call_ois, name="Call OI", orientation="h",
+                             marker_color="#42A5F5", opacity=0.6,
+                             text=[f"{v:,}" for v in _call_ois], textposition="auto"))
+    _fig_oi.add_trace(go.Bar(y=_ys, x=_put_ois, name="Put OI", orientation="h",
+                             marker_color="#EF5350", opacity=0.6,
+                             text=[f"{v:,}" for v in _put_ois], textposition="auto"))
+    _fig_oi.update_layout(
+        height=320,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=30, b=40),
+        barmode="group",
+        title=dict(text="各格 OI 分布（看賣方把籌碼押在哪區）", font=dict(color="#E0E0E0", size=14)),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="OI（口）"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)"),
+        legend=dict(orientation="h", y=1.12, x=0.5, xanchor="center"),
+    )
+    st.plotly_chart(_fig_oi, use_container_width=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **moneyness**（履約價距現價 %）:
+              - Call：strike > spot 為 OTM、strike < spot 為 ITM
+              - Put：strike > spot 為 ITM、strike < spot 為 OTM
+            - **五格分類**：ATM（|m|<0.5%）、ITM/OTM（0.5%~3%）、深度 ITM/OTM（≥3%）
+            - **P&L 計算**：(avg_cost − daily_price) × OI，P&L > 0 = 賣方帳面獲利（權利金在貶值）、< 0 = 賣方虧損（權利金在升值）
+            - **每點價值**：台指選擇權每點 NT$ 50
+            - **讀法範例**：
+              - Call OTM 大量 P&L 正 → 賣 Call 部位賺時間價值，市場偏區間盤整；若 spot 突破該區間，P&L 會急速惡化
+              - Put OTM 大量 OI + P&L 負 → 大跌後賣 Put 被套，需防多殺多
+              - ATM 雙邊 P&L 正 → 典型賣 straddle 策略獲利，隱含波動率壓縮中
+              - 深度 OTM 大量 OI 很安全 → 賣方賭「不會到」的尾端險位
+            - **搭配**：Call OTM 最痛格集中 ≈ Round 15 Max Pain 上方突破位 / Put OTM 最痛格集中 ≈ 支撐破位
+            """
+        )
+else:
+    st.info("賣方分層壓力資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
