@@ -1852,4 +1852,120 @@ else:
     st.info("OI 變動資料不足（需要至少兩日近月資料）。")
 
 st.divider()
+
+# ── 選擇權成交量集中度 ────────────────────────────────────────────────────────
+st.subheader("🎯 選擇權成交量集中度（Top 3 履約價占比）")
+st.caption("主力合約月份 top-3 履約價+買賣權 成交量 / 當日總成交量；判斷機構集中下注 vs 散戶分散。")
+
+try:
+    _vc_resp = requests.get(f"{API_URL}/market/volume-concentration", params={"days": 10, "top_n": 3}, timeout=15)
+    _vc_resp.raise_for_status()
+    _vc_data = _vc_resp.json()
+except Exception as e:
+    st.error(f"成交量集中度 API 錯誤：{e}")
+    _vc_data = {}
+
+_vc_series = _vc_data.get("series") or []
+_vc_stats = _vc_data.get("stats") or {}
+_vc_current = _vc_data.get("current_top")
+
+if _vc_series and _vc_stats:
+    # KPIs
+    vc1, vc2, vc3, vc4 = st.columns(4)
+    _latest_pct = _vc_stats.get("latest_concentration_pct", 0) or 0
+    _avg_pct = _vc_stats.get("avg_concentration_pct", 0) or 0
+    _delta = _vc_stats.get("delta_vs_avg", 0) or 0
+    _days_cov = _vc_stats.get("days_covered", 0)
+    vc1.metric("最新集中度", f"{_latest_pct:.1f}%")
+    vc2.metric(f"{_days_cov}日均值", f"{_avg_pct:.1f}%")
+    vc3.metric("偏離幅度", f"{_delta:+.1f} pp")
+    _state_map = {
+        "concentrated": ("🎯 機構集中", "#EF5350"),
+        "balanced": ("⚖️ 平衡分布", "#FFB300"),
+        "dispersed": ("📊 散戶分散", "#26A69A"),
+    }
+    _s_label, _s_color = _state_map.get(_vc_stats.get("current_state", ""), ("—", "#888"))
+    vc4.metric("目前狀態", _s_label)
+
+    # 狀態卡
+    _trend_label = {
+        "rising": "📈 集中度上升（機構加碼特定履約價）",
+        "falling": "📉 集中度下降（部位擴散）",
+        "stable": "➡️ 集中度持平",
+    }.get(_vc_stats.get("trend_state", "stable"), "➡️")
+    st.markdown(
+        f"""
+        <div style="border-left:4px solid {_s_color}; background:rgba(128,128,128,0.08);
+                    padding:10px 14px; margin:8px 0; border-radius:4px;">
+          <div style="font-size:14px; color:#E0E0E0;">
+            <strong>{_trend_label}</strong>
+            <span style="color:#BDBDBD;"> — 目前 top-3 履約價吃掉當日主力月份成交量 {_latest_pct:.1f}%，{_days_cov} 日均值 {_avg_pct:.1f}%。</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 時序圖：集中度曲線
+    _vc_dates = [s["trade_date"] for s in _vc_series]
+    _vc_pcts = [s["concentration_pct"] for s in _vc_series]
+    _fig_vc = go.Figure()
+    _fig_vc.add_trace(
+        go.Scatter(x=_vc_dates, y=_vc_pcts, mode="lines+markers",
+                   name="Top-3 集中度 %", line=dict(color="#42A5F5", width=2.5),
+                   marker=dict(size=8),
+                   fill="tozeroy", fillcolor="rgba(66,165,245,0.12)")
+    )
+    _fig_vc.add_hline(y=40, line_dash="dash", line_color="#EF5350", opacity=0.6,
+                      annotation_text="40% 集中門檻", annotation_position="top right",
+                      annotation_font_color="#EF5350")
+    _fig_vc.add_hline(y=20, line_dash="dash", line_color="#26A69A", opacity=0.6,
+                      annotation_text="20% 分散門檻", annotation_position="bottom right",
+                      annotation_font_color="#26A69A")
+    _fig_vc.update_layout(
+        height=320,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        margin=dict(l=40, r=40, t=20, b=40),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="交易日"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.2)", title="集中度 %", range=[0, max(60, max(_vc_pcts) + 5)]),
+        hovermode="x unified",
+        showlegend=False,
+    )
+    st.plotly_chart(_fig_vc, use_container_width=True)
+
+    # 當日 top-3 履約價細節
+    if _vc_current and _vc_current.get("top_strikes"):
+        st.markdown(f"##### 📌 {_vc_current['trade_date']} 主力合約 {_vc_current['dominant_month']} — Top {len(_vc_current['top_strikes'])} 履約價")
+        _top_rows = []
+        _today_total = _vc_series[-1]["total_volume"]
+        for i, t in enumerate(_vc_current["top_strikes"], 1):
+            _pct = (t["volume"] / _today_total * 100.0) if _today_total else 0
+            _top_rows.append({
+                "排名": f"#{i}",
+                "履約價": f"{t['strike']:,.0f}",
+                "類型": "📞 Call" if t["call_put"] == "C" else "📋 Put",
+                "成交量": f"{t['volume']:,}",
+                "占當日 %": f"{_pct:.1f}%",
+            })
+        st.dataframe(_top_rows, use_container_width=True, hide_index=True)
+
+    with st.expander("📖 讀法說明"):
+        st.markdown(
+            """
+            - **主力月份**：當日 TXO 最高成交量的合約月份（可能是月選或週選），以此為分母計算集中度
+            - **集中度 > 40%（concentrated）**：機構把籌碼壓在少數關鍵履約價 → 該價位具吸力（pin 效應）；若與 Max Pain 或 Top OI 重合，吸力更強
+            - **集中度 20~40%（balanced）**：典型日常分布，無明顯立場
+            - **集中度 < 20%（dispersed）**：籌碼分散 → 散戶各自下注或無共識，方向性較弱
+            - **趨勢判讀**：
+              - 集中度突升 → 機構準備發動或押注即將發生的事件（結算、財報、FOMC）
+              - 集中度下降 → 部位解散，可能是事件過後的獲利了結
+            - **搭配其他指標**：高集中度 + Round 14 波動率擴張 = 大單押注波動事件 / 高集中度 + Round 15 Max Pain pinning = 橫盤收斂定錨。
+            """
+        )
+else:
+    st.info("成交量集中度資料不足。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")

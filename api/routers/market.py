@@ -1645,3 +1645,124 @@ def get_settlement_history(
         "settlements": results,
         "summary": summary,
     }
+
+
+@router.get("/volume-concentration")
+def get_volume_concentration(
+    days: int = Query(default=10, ge=5, le=30),
+    top_n: int = Query(default=3, ge=2, le=5),
+):
+    """
+    選擇權成交量集中度 — 過去 N 個交易日，主力合約月份的 top-N (strike, call_put) 成交量佔當日總成交量比例。
+    - 主力月份 = 當日最高成交量的 TXO 合約月份（月選或週選皆可）
+    - concentrated (>=40%)、balanced (20~40%)、dispersed (<20%)
+    - 散戶分散下單則比例低，機構集中下注於少數關鍵履約價則比例高
+    """
+    # 取得最近 N 個交易日
+    date_rows = query(
+        """
+        SELECT DISTINCT trade_date FROM txo_options_daily
+        WHERE session = '一般'
+        ORDER BY trade_date DESC
+        LIMIT %s
+        """,
+        (days,),
+    )
+    if not date_rows:
+        return {"series": [], "current_top": [], "stats": None, "error": "no_data"}
+
+    trade_dates = [r["trade_date"] for r in date_rows]
+    trade_dates.sort()  # ASC for series
+
+    series = []
+    current_top_detail = None
+    for td in trade_dates:
+        # 找當日主力月份（最高成交量的 contract_month）
+        dom_rows = query(
+            """
+            SELECT contract_month, SUM(volume) AS total_vol
+            FROM txo_options_daily
+            WHERE trade_date = %s AND session = '一般' AND volume > 0
+            GROUP BY contract_month
+            ORDER BY total_vol DESC
+            LIMIT 1
+            """,
+            (td,),
+        )
+        if not dom_rows or not dom_rows[0].get("total_vol"):
+            continue
+        dominant_month = dom_rows[0]["contract_month"]
+        total_vol = int(dom_rows[0]["total_vol"])
+        if total_vol <= 0:
+            continue
+
+        # 抓該主力月份所有 (strike, call_put) 成交量
+        rows = query(
+            """
+            SELECT strike_price, call_put, volume
+            FROM txo_options_daily
+            WHERE trade_date = %s AND contract_month = %s AND session = '一般'
+              AND volume > 0
+            ORDER BY volume DESC
+            LIMIT %s
+            """,
+            (td, dominant_month, top_n),
+        )
+        if not rows:
+            continue
+
+        top_entries = []
+        top_sum = 0
+        for r in rows:
+            v = int(r["volume"])
+            top_entries.append({
+                "strike": float(r["strike_price"]),
+                "call_put": r["call_put"],
+                "volume": v,
+            })
+            top_sum += v
+        concentration_pct = round(top_sum / total_vol * 100.0, 2) if total_vol else 0.0
+
+        if concentration_pct >= 40:
+            state = "concentrated"
+        elif concentration_pct >= 20:
+            state = "balanced"
+        else:
+            state = "dispersed"
+
+        series.append({
+            "trade_date": str(td),
+            "dominant_month": dominant_month,
+            "total_volume": total_vol,
+            "top_volume": top_sum,
+            "concentration_pct": concentration_pct,
+            "state": state,
+        })
+        current_top_detail = {
+            "trade_date": str(td),
+            "dominant_month": dominant_month,
+            "top_strikes": top_entries,
+        }
+
+    if not series:
+        return {"series": [], "current_top": None, "stats": None, "error": "no_data"}
+
+    # 統計
+    pcts = [s["concentration_pct"] for s in series]
+    avg = sum(pcts) / len(pcts)
+    latest = series[-1]["concentration_pct"]
+    delta = round(latest - avg, 2)
+    trend_state = "rising" if delta > 3 else ("falling" if delta < -3 else "stable")
+
+    return {
+        "series": series,
+        "current_top": current_top_detail,
+        "stats": {
+            "days_covered": len(series),
+            "avg_concentration_pct": round(avg, 2),
+            "latest_concentration_pct": latest,
+            "delta_vs_avg": delta,
+            "trend_state": trend_state,
+            "current_state": series[-1]["state"],
+        },
+    }
