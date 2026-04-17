@@ -465,6 +465,105 @@ def get_night_session(
     }
 
 
+@router.get("/large-trader-watch")
+def get_large_trader_watch(
+    days: int = Query(default=7, ge=3, le=60),
+    month_scope: str = Query(default="近月"),
+):
+    """
+    大額交易人動向 — 特定法人（前 5/10 大戶）net position 時序。
+    month_scope='近月' 取近月合約（trader_type 含 YYYYMM 的最小月份 + 特定法人）
+    - TX: 近月 net = long - short
+    - TXO: 買權 net、賣權 net（近月）
+    - 也回傳全體交易人作對照
+    """
+    # 用近月 contract_month 字串匹配（trader_type 格式 '202605-特定法人' 或 '買權-202605-特定法人'）
+    # 先查最新交易日的近月 contract_month
+    latest_month_rows = query(
+        """
+        SELECT MIN(contract_month) AS near_month
+        FROM tx_futures_daily
+        WHERE session = '一般' AND LENGTH(contract_month) = 6
+          AND trade_date = (SELECT MAX(trade_date) FROM tx_futures_daily WHERE session='一般')
+        """
+    )
+    near_month = latest_month_rows[0]["near_month"] if latest_month_rows else None
+
+    if not near_month:
+        return {"series": [], "stats": {}, "near_month": None}
+
+    # 查 large_trader_positions，篩含 near_month 的 trader_type
+    rows = query(
+        """
+        SELECT trade_date, contract_code, trader_type,
+               long_position, short_position, market_oi
+        FROM large_trader_positions
+        WHERE trade_date >= (CURRENT_DATE - %s * INTERVAL '1 day')
+          AND trader_type LIKE %s
+        ORDER BY trade_date
+        """,
+        (days * 2, f"%{near_month}%"),  # 多查一點防假日
+    )
+
+    # 分類：TX 特定法人 / TX 全體 / TXO 買權 特定 / TXO 買權 全體 / TXO 賣權 特定 / TXO 賣權 全體
+    by_date: dict[str, dict] = {}
+    for r in rows:
+        d = str(r["trade_date"])
+        tt = r["trader_type"]
+        bucket = by_date.setdefault(d, {})
+        long_p = int(r["long_position"] or 0)
+        short_p = int(r["short_position"] or 0)
+        net = long_p - short_p
+        if r["contract_code"] == "TX" and "特定法人" in tt:
+            bucket["tx_specific_net"] = net
+            bucket["tx_specific_long"] = long_p
+            bucket["tx_specific_short"] = short_p
+        elif r["contract_code"] == "TX" and "全體交易人" in tt:
+            bucket["tx_total_net"] = net
+        elif r["contract_code"] == "TXO" and "買權" in tt and "特定法人" in tt:
+            bucket["txo_call_specific_net"] = net
+        elif r["contract_code"] == "TXO" and "買權" in tt and "全體交易人" in tt:
+            bucket["txo_call_total_net"] = net
+        elif r["contract_code"] == "TXO" and "賣權" in tt and "特定法人" in tt:
+            bucket["txo_put_specific_net"] = net
+        elif r["contract_code"] == "TXO" and "賣權" in tt and "全體交易人" in tt:
+            bucket["txo_put_total_net"] = net
+
+    all_dates = sorted(by_date.keys())[-days:]
+    series = [{"trade_date": d, **by_date.get(d, {})} for d in all_dates]
+
+    stats = {}
+    if series:
+        latest = series[-1]
+        stats = {
+            "latest_date": latest["trade_date"],
+            "tx_specific_net": latest.get("tx_specific_net"),
+            "txo_call_specific_net": latest.get("txo_call_specific_net"),
+            "txo_put_specific_net": latest.get("txo_put_specific_net"),
+            "near_month": near_month,
+        }
+        # 期權淨多空傾向：特定法人 Put net > 0 且 Call net < 0 = 看空/避險
+        c = stats["txo_call_specific_net"]
+        p = stats["txo_put_specific_net"]
+        if c is not None and p is not None:
+            if p > 0 and c < 0:
+                stats["options_lean"] = "bearish_hedge"
+            elif p < 0 and c > 0:
+                stats["options_lean"] = "bullish"
+            elif p > 0 and c > 0:
+                stats["options_lean"] = "long_vol"
+            elif p < 0 and c < 0:
+                stats["options_lean"] = "short_vol"
+            else:
+                stats["options_lean"] = "neutral"
+
+    return {
+        "near_month": near_month,
+        "series": series,
+        "stats": stats,
+    }
+
+
 @router.get("/institutional-divergence")
 def get_institutional_divergence(
     days: int = Query(default=30, ge=10, le=120),

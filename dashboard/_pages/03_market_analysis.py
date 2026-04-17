@@ -1003,4 +1003,111 @@ else:
     st.info("法人背離資料不足，需至少 10 個交易日的完整資料。")
 
 st.divider()
+
+# ── 大額交易人動向（特定法人前 5/10 大戶） ────────────────────────────────────
+st.subheader("🐋 大額交易人動向 — 特定法人（前 5/10 大戶）")
+st.caption("TAIFEX 公布的「大額交易人」資料（前 5/10 大戶部位），顆粒度比三大法人週報更細；特定法人 = 當日最大倉位的 5-10 家機構合計")
+
+try:
+    _lt_resp = requests.get(f"{API_URL}/market/large-trader-watch", params={"days": 7}, timeout=15)
+    _lt_resp.raise_for_status()
+    _lt_data = _lt_resp.json()
+except Exception as e:
+    st.error(f"大戶動向 API 錯誤：{e}")
+    _lt_data = {}
+
+_lt_series = _lt_data.get("series") or []
+_lt_stats = _lt_data.get("stats") or {}
+_near_month = _lt_data.get("near_month") or "—"
+
+if _lt_series and _lt_stats:
+    _lean_map = {
+        "bearish_hedge": ("⚠️ 避險/看空", "#EF5350", "買 Put 賣 Call"),
+        "bullish": ("🟢 看多", "#66BB6A", "買 Call 賣 Put"),
+        "long_vol": ("🟡 做多波動", "#FFB74D", "買 Call 買 Put"),
+        "short_vol": ("🔵 做空波動", "#4FC3F7", "賣 Call 賣 Put"),
+        "neutral": ("—", "#888", "方向模糊"),
+    }
+    _lean = _lt_stats.get("options_lean", "neutral")
+    _lean_lbl, _lean_clr, _lean_desc = _lean_map.get(_lean, ("—", "#888", ""))
+
+    _lt_cols = st.columns(4)
+    _tx_net = _lt_stats.get("tx_specific_net") or 0
+    _call_net = _lt_stats.get("txo_call_specific_net") or 0
+    _put_net = _lt_stats.get("txo_put_specific_net") or 0
+    _lt_cols[0].metric("TX 近月特定法人 net", f"{_tx_net:+,.0f} 口",
+                       delta_color="normal" if _tx_net >= 0 else "inverse",
+                       help=f"近月 {_near_month}，長倉 - 短倉")
+    _lt_cols[1].metric("TXO 買權特定法人 net", f"{_call_net:+,.0f} 口",
+                       delta_color="normal" if _call_net >= 0 else "inverse",
+                       help="Call long - short；負值 = 大戶淨賣 Call")
+    _lt_cols[2].metric("TXO 賣權特定法人 net", f"{_put_net:+,.0f} 口",
+                       delta_color="normal" if _put_net >= 0 else "inverse",
+                       help="Put long - short；正值 = 大戶淨買 Put（避險）")
+    _lt_cols[3].markdown(
+        f"""
+        <div style="padding:12px;border-radius:8px;background:rgba(255,255,255,0.03);border-left:4px solid {_lean_clr}">
+          <div style="color:#888;font-size:12px">期權大戶傾向</div>
+          <div style="color:{_lean_clr};font-size:15px;font-weight:600;margin:4px 0">{_lean_lbl}</div>
+          <div style="color:#aaa;font-size:11px">{_lean_desc}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    _df_lt = pd.DataFrame(_lt_series)
+    _df_lt["trade_date"] = pd.to_datetime(_df_lt["trade_date"])
+
+    _fig_lt = make_subplots(specs=[[{"secondary_y": True}]])
+    _fig_lt.add_trace(
+        go.Bar(x=_df_lt["trade_date"], y=_df_lt.get("tx_specific_net"), name="TX 特定法人 net",
+               marker_color="#FFD54F", opacity=0.7,
+               hovertemplate="%{x|%Y-%m-%d}<br>TX net %{y:+,.0f} 口<extra></extra>"),
+        secondary_y=False,
+    )
+    _fig_lt.add_trace(
+        go.Scatter(x=_df_lt["trade_date"], y=_df_lt.get("txo_call_specific_net"), name="TXO Call net（特定）",
+                   line=dict(color="#4FC3F7", width=2),
+                   hovertemplate="%{x|%Y-%m-%d}<br>Call net %{y:+,.0f}<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_lt.add_trace(
+        go.Scatter(x=_df_lt["trade_date"], y=_df_lt.get("txo_put_specific_net"), name="TXO Put net（特定）",
+                   line=dict(color="#BA68C8", width=2, dash="dot"),
+                   hovertemplate="%{x|%Y-%m-%d}<br>Put net %{y:+,.0f}<extra></extra>"),
+        secondary_y=True,
+    )
+    _fig_lt.update_layout(
+        title=dict(text=f"7 日特定法人 net — 近月 {_near_month}", font=dict(size=14, color="#E0E0E0")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#E0E0E0"),
+        height=380,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.08),
+        margin=dict(l=40, r=40, t=50, b=40),
+    )
+    _fig_lt.update_xaxes(title="交易日", color="#E0E0E0", gridcolor="rgba(255,255,255,0.1)")
+    _fig_lt.update_yaxes(title="TX 期貨 net（口）", secondary_y=False, color="#FFD54F", gridcolor="rgba(255,255,255,0.1)")
+    _fig_lt.update_yaxes(title="TXO 選擇權 net（口）", secondary_y=True, color="#E0E0E0", zerolinecolor="rgba(255,255,255,0.3)", showgrid=False)
+
+    st.plotly_chart(_fig_lt, use_container_width=True, key="large_trader_chart")
+
+    with st.expander("📖 如何解讀大額交易人動向？"):
+        st.markdown(
+            """
+            - **特定法人**：當日未平倉量前 5 大（TX）/前 10 大（TXO）交易人的合計，通常是外資大機構或造市商，精明度高於一般散戶。
+            - **TX 近月 net > 0**：大戶淨多；net < 0：大戶淨空。可與三大法人淨部位互相印證。
+            - **TXO 期權傾向組合**：
+              - **避險/看空**（買 Put 賣 Call）：期貨多頭可能搭配 Put 避險，或直接看空。
+              - **看多**（買 Call 賣 Put）：積極看多的明確訊號。
+              - **做多波動**（買 Call 買 Put）：預期大事件/結算行情。
+              - **做空波動**（賣 Call 賣 Put）：預期盤整，賺時間價值。
+            - **注意**：特定法人 ≠ 外資，可能是本土券商自營、外資自營或做市商；組合型交易（跨式、價差）無法從 net 判斷。
+            """
+        )
+else:
+    st.info("大額交易人資料尚未載入或近月合約無部位。")
+
+st.divider()
 st.caption("資料來源：台灣期貨交易所（TAIFEX）公開資訊  |  本頁所有內容僅供資料呈現與學術研究，不構成投資建議。期貨交易涉及高度風險，請自行評估並諮詢合格期貨顧問。")
