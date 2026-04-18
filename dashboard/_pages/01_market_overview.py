@@ -30,13 +30,20 @@ if _ns and _ns.get("night_session"):
     _day = _ns.get("day_session") or {}
     _night = _ns.get("night_session") or {}
     _opt = _ns.get("options_night_summary") or {}
+    _ref = _ns.get("ref_day_close") or {}   # 缺口基準（同日日盤 or 前一交易日）
+    _prev = _ns.get("prev_day_close") or {}
 
-    _day_close = _day.get("close")
+    # 週五→週一跨週末夜盤：同日無日盤，改用前一交易日收盤作為基準顯示
+    _ref_close = _ref.get("close")
+    _ref_date = _ref.get("trade_date", "")   # 基準日期（標記用）
     _night_close = _night.get("close")
     _gap_open = _ns.get("gap_day_to_night_open")
     _gap_open_pct = _ns.get("gap_day_to_night_open_pct")
     _gap_close = _ns.get("gap_day_to_night")
     _gap_close_pct = _ns.get("gap_day_to_night_pct")
+
+    # 判斷是否為跨週末情境（同日無日盤）
+    _is_weekend_session = not bool(_day)
 
     def _sign(v): return "+" if (v or 0) > 0 else ""
     def _fmt_pt(v): return f"{_sign(v)}{v:,.0f} 點" if v is not None else "—"
@@ -44,24 +51,33 @@ if _ns and _ns.get("night_session"):
 
     _ns_cols = st.columns(5)
 
+    _ref_label = "前日收盤" if _is_weekend_session else "日盤收盤"
+    _ref_help = (
+        f"前一交易日（{_ref_date}）日盤收盤，作為週末夜盤缺口基準"
+        if _is_weekend_session else "當日日盤（一般）近月 TX 收盤價"
+    )
     _ns_cols[0].metric(
-        "日盤收盤",
-        f"{_day_close:,.0f}" if _day_close else "—",
-        help="當日日盤（一般）近月 TX 收盤價",
+        _ref_label,
+        f"{_ref_close:,.0f}" if _ref_close else "—",
+        help=_ref_help,
     )
     _ns_cols[1].metric(
         "跳空缺口（開盤）",
         _fmt_pt(_gap_open),
         delta=_fmt_pct(_gap_open_pct),
         delta_color="normal" if (_gap_open or 0) >= 0 else "inverse",
-        help="夜盤開盤價 − 日盤收盤價，代表實際跳空幅度",
+        help="夜盤開盤價 − 基準收盤，代表實際跳空幅度",
+    )
+    _gap_close_help = (
+        f"夜盤收盤，括號內為相對前日（{_ref_date}）收盤的淨變化"
+        if _is_weekend_session else "夜盤收盤價，括號內為相對日盤收盤的淨變化"
     )
     _ns_cols[2].metric(
         "夜盤收盤（淨變化）",
         f"{_night_close:,.0f}" if _night_close else "—",
         delta=_fmt_pt(_gap_close) + (f"（{_fmt_pct(_gap_close_pct)}）" if _gap_close_pct else ""),
         delta_color="normal" if (_gap_close or 0) >= 0 else "inverse",
-        help="夜盤收盤價，括號內為相對日盤收盤的淨變化",
+        help=_gap_close_help,
     )
     _ns_cols[3].metric(
         "夜盤成交量",
@@ -75,7 +91,8 @@ if _ns and _ns.get("night_session"):
         f"{_pcr:.2f}" if _pcr is not None else "—",
         help=f"夜盤選擇權　Call {_cv:,} / Put {_pv:,}",
     )
-    st.caption(f"資料日期：{_td}　|　夜盤 15:00~次日 05:00　|　詳細分析見 [市場進階分析](/analysis)（Pro）")
+    _session_note = "週末夜盤（Fri 15:00~Mon 05:00），日盤於週一開盤" if _is_weekend_session else "夜盤 15:00~次日 05:00"
+    st.caption(f"資料日期：{_td}　|　{_session_note}　|　詳細分析見 [市場進階分析](/analysis)（Pro）")
 else:
     st.caption("目前無最新夜盤資料。")
 

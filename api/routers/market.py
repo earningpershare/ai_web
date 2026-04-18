@@ -996,12 +996,19 @@ def get_night_session(
     night_close = _f(night[0]["close_price"]) if night else None
     prev_close = _f(prev_day[0]["close_price"]) if prev_day else None
 
-    gap_open = (night_open - day_close) if (day_close is not None and night_open is not None) else None
-    gap_close = (night_close - day_close) if (day_close is not None and night_close is not None) else None
+    # 週五→週一跨週末夜盤：trade_date 為週一，但同日無日盤（日盤在夜盤之後才開）。
+    # 以 prev_close（前一交易日收盤）作為缺口基準，反映實際開盤跳空幅度。
+    ref_close = day_close if day_close is not None else prev_close
+    ref_date = str(day[0]["trade_date"]) if day else (str(prev_day[0]["trade_date"]) if prev_day else None)
+
+    gap_open = (night_open - ref_close) if (ref_close is not None and night_open is not None) else None
+    gap_close = (night_close - ref_close) if (ref_close is not None and night_close is not None) else None
     gap_prev_to_night = (night_close - prev_close) if (prev_close is not None and night_close is not None) else None
 
     return {
         "trade_date": str(trade_date),
+        # 當同日無日盤時（週五→週一夜盤），day_session 為 None，
+        # 但 ref_day_close 欄位提供前一交易日收盤供前端顯示
         "day_session": {
             "contract_month": day[0]["contract_month"] if day else None,
             "open": _f(day[0]["open_price"]) if day else None,
@@ -1022,12 +1029,14 @@ def get_night_session(
             "trade_date": str(prev_day[0]["trade_date"]) if prev_day else None,
             "close": prev_close,
         } if prev_day else None,
-        # gap_day_to_night_open：夜盤開盤 − 日盤收盤（真正的跳空缺口）
+        # ref_day_close：缺口計算的基準收盤（優先同日日盤，無則用前一交易日）
+        "ref_day_close": {"trade_date": ref_date, "close": ref_close} if ref_close is not None else None,
+        # gap_day_to_night_open：夜盤開盤 − 基準收盤（跳空缺口，含跨週末情境）
         "gap_day_to_night_open": gap_open,
-        "gap_day_to_night_open_pct": (gap_open / day_close * 100) if (gap_open is not None and day_close) else None,
-        # gap_day_to_night：夜盤收盤 − 日盤收盤（整段淨變化）
+        "gap_day_to_night_open_pct": (gap_open / ref_close * 100) if (gap_open is not None and ref_close) else None,
+        # gap_day_to_night：夜盤收盤 − 基準收盤（整段淨變化）
         "gap_day_to_night": gap_close,
-        "gap_day_to_night_pct": (gap_close / day_close * 100) if (gap_close is not None and day_close) else None,
+        "gap_day_to_night_pct": (gap_close / ref_close * 100) if (gap_close is not None and ref_close) else None,
         "gap_prev_to_night": gap_prev_to_night,
         "options_night_summary": opt_night[0] if opt_night else None,
     }
