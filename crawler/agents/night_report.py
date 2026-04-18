@@ -8,7 +8,7 @@
 import logging
 import os
 import smtplib
-from datetime import date, timedelta
+from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -49,26 +49,34 @@ def build_prompt(data: dict) -> str:
     gap_dn_pct = data.get("gap_day_to_night_pct")
     gap_pn = data.get("gap_prev_to_night")
 
+    # 安全格式化（避免 None 進 f-string 引發 crash）
+    def _n(v, fmt=None):
+        if v is None:
+            return "—"
+        return f"{v:{fmt}}" if fmt else str(v)
+
+    gap_dn_str = f"{_n(gap_dn)} 點（{_n(gap_dn_pct, '.2f')}%）"
+
     return f"""你是台指期貨分析助理。以下是 {td} 的 TAIFEX 夜盤（session='盤後'）與日盤（session='一般'）近月 TX 收盤資料。
 請產出『盤前夜盤觀察報告』，要在日盤開盤（次日 08:45）前寄送給交易人。
 
-**資料**
-- 日盤 {day.get('contract_month','—')}：開 {day.get('open','—')}、高 {day.get('high','—')}、低 {day.get('low','—')}、收 {day.get('close','—')}，量 {day.get('volume','—')}
-- 夜盤 {night.get('contract_month','—')}：開 {night.get('open','—')}、高 {night.get('high','—')}、低 {night.get('low','—')}、收 {night.get('close','—')}，量 {night.get('volume','—')}
-- 日盤→夜盤缺口：{gap_dn} 點（{gap_dn_pct:.2f}% ）
-- 前一交易日 {prev.get('trade_date','—')} 日盤收：{prev.get('close','—')}（用來觀察整段時序變化）
-- 前日日盤→本夜盤缺口：{gap_pn} 點
-- 夜盤選擇權成交量：Call {opt.get('call_volume','—')}、Put {opt.get('put_volume','—')}、總計 {opt.get('total_volume','—')}
+**重要原則：只根據下方提供的數字進行分析。禁止臆測、禁止使用 Google Search 或任何外部查詢、禁止捏造任何沒有提供的數字（包含美股指數、個股、ADR 等）。若某段內容缺乏數據支撐，請明確寫出「本報告無此項目數據」。**
+
+**資料（{td}）**
+- 日盤 {day.get('contract_month','—')}：開 {_n(day.get('open'))}、高 {_n(day.get('high'))}、低 {_n(day.get('low'))}、收 {_n(day.get('close'))}，量 {_n(day.get('volume'))}
+- 夜盤 {night.get('contract_month','—')}：開 {_n(night.get('open'))}、高 {_n(night.get('high'))}、低 {_n(night.get('low'))}、收 {_n(night.get('close'))}，量 {_n(night.get('volume'))}
+- 日盤→夜盤缺口：{gap_dn_str}
+- 前一交易日 {prev.get('trade_date','—')} 日盤收：{_n(prev.get('close'))}（整段時序參考）
+- 前日日盤→本夜盤缺口：{_n(gap_pn)} 點
+- 夜盤選擇權成交量：Call {_n(opt.get('call_volume'))}、Put {_n(opt.get('put_volume'))}、總計 {_n(opt.get('total_volume'))}
 
 **要求**
-1. 用繁體中文、**800–1200 字**、HTML 格式（可用 <h3>、<h4>、<p>、<ul>、<li>、<strong>、<table> 基本標籤；不要用 <html><body> 包外層、不要用 markdown 語法、不要有 ```html``` 之類的代碼圍欄）
+1. 用繁體中文、**600–1000 字**、HTML 格式（可用 <h3>、<h4>、<p>、<ul>、<li>、<strong>、<table> 基本標籤；不要用 <html><body> 包外層、不要用 markdown 語法）
 2. 結構：
-   - **<h3>夜盤速覽</h3>**：一段 3–4 句話的重點濃縮（夜盤漲跌、缺口方向、成交量熱度）
-   - **<h3>國際盤脈絡</h3>**：用 Google Search 查當天凌晨美股（S&P 500、那斯達克、費城半導體）、原油、黃金、美債殖利率、台積電 ADR 的重點變化；150–250 字
-   - **<h3>夜盤解讀</h3>**：夜盤走勢反映什麼 risk sentiment？call vs put 成交量暗示方向？200–300 字
-   - **<h3>日盤開盤劇本</h3>**：基於夜盤缺口推演開盤可能場景（往上跳空、往下跳空、平開，以及後續可能壓力/支撐位）；150–250 字，語氣客觀、不做 call 單
-3. 結尾加一段極小聲明：「本報告不構成投資建議，期貨交易涉及高度風險。」
-4. 使用 Google Search 抓國際市場即時新聞，但只提供與台指相關的重點
+   - **<h3>夜盤速覽</h3>**：3–4 句濃縮（夜盤漲跌幅、缺口方向、成交量熱度，全部基於上方數字）
+   - **<h3>夜盤解讀</h3>**：夜盤走勢反映什麼 risk sentiment？Call/Put 比暗示方向偏多或偏空？200–300 字
+   - **<h3>日盤開盤劇本</h3>**：基於夜盤缺口推演開盤可能場景（跳空方向、後續壓力/支撐位）；150–250 字，語氣客觀、不做買賣建議
+3. 結尾加聲明：「本報告不構成投資建議，期貨交易涉及高度風險。」
 """
 
 

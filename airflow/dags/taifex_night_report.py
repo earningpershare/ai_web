@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import sys
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
@@ -21,6 +21,19 @@ sys.path.insert(0, "/opt/crawler")
 log = logging.getLogger(__name__)
 
 NOTIFY_EMAIL = "somehandisfrank@gmail.com"
+
+
+def crawl_night_session(**context):
+    """
+    07:30 執行時補爬前一交易日的期貨 + 選擇權資料（含夜盤 session='盤後'）。
+    taifex_daily 跑在 17:00，但夜盤 05:00 才收盤，所以當天 17:00 的爬蟲抓不到夜盤。
+    這裡用 date.today() - 1 補抓（Tue-Sat 排程，前一天永遠是平日）。
+    """
+    from agents import taifex_futures, taifex_options
+    yesterday = date.today() - timedelta(days=1)
+    log.info("補爬夜盤資料 trade_date=%s", yesterday)
+    taifex_futures.run(yesterday)
+    taifex_options.run(yesterday)
 
 
 def run_night_report(ds: str, params: dict = None, **context):
@@ -47,6 +60,13 @@ def run_night_report(ds: str, params: dict = None, **context):
         probe = resp.json()
         if not probe or not probe.get("night_session"):
             log.info("無夜盤資料（trade_date=%s），跳過報告", trade_date or "latest")
+            return
+        # 資料新鮮度檢查：超過 2 天的舊資料不寄（避免用舊資料生成幻覺報告）
+        from datetime import date as _date
+        api_td = _date.fromisoformat(probe["trade_date"])
+        days_old = (_date.today() - api_td).days
+        if days_old > 2:
+            log.warning("夜盤資料過期（%s，%d 天前），跳過報告避免幻覺", api_td, days_old)
             return
     except Exception as e:
         log.warning("探查夜盤資料失敗（%s），仍嘗試執行", e)
@@ -92,7 +112,14 @@ with DAG(
     },
 ) as dag:
 
+    t_crawl = PythonOperator(
+        task_id="crawl_night_session",
+        python_callable=crawl_night_session,
+    )
+
     t_night = PythonOperator(
         task_id="generate_and_send_night_report",
         python_callable=run_night_report,
     )
+
+    t_crawl >> t_night
