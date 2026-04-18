@@ -25,14 +25,16 @@ NOTIFY_EMAIL = "somehandisfrank@gmail.com"
 
 def crawl_night_session(**context):
     """
-    07:30 執行時補爬前一交易日的期貨 + 選擇權資料（含夜盤 session='盤後'）。
-    taifex_daily 跑在 17:00，但夜盤 05:00 才收盤，所以當天 17:00 的爬蟲抓不到夜盤。
-    這裡用 date.today() - 1 補抓（Tue-Sat 排程，前一天永遠是平日）。
+    07:30 執行時補爬夜盤終盤資料。
+    taifex_daily 跑在 17:00（夜盤開盤後 2 小時），抓到的是盤中快照。
+    這裡改用 TAIFEX OpenAPI run_latest()，回傳最新交易日資料（無日期篩選），
+    搭配 taifex_options.run(yesterday) 確保選擇權資料也補齊。
     """
     from agents import taifex_futures, taifex_options
     yesterday = date.today() - timedelta(days=1)
-    log.info("補爬夜盤資料 trade_date=%s", yesterday)
-    taifex_futures.run(yesterday)
+    log.info("用 OpenAPI 補爬最新期貨終盤資料（預期 trade_date=%s）", yesterday)
+    taifex_futures.run_latest()
+    log.info("補爬選擇權資料 trade_date=%s", yesterday)
     taifex_options.run(yesterday)
 
 
