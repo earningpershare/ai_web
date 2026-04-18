@@ -26,16 +26,55 @@ NOTIFY_EMAIL = "somehandisfrank@gmail.com"
 def crawl_night_session(**context):
     """
     07:30 執行時補爬夜盤終盤資料。
-    taifex_daily 跑在 17:00（夜盤開盤後 2 小時），抓到的是盤中快照。
-    這裡改用 TAIFEX OpenAPI run_latest()，回傳最新交易日資料（無日期篩選），
-    搭配 taifex_options.run(yesterday) 確保選擇權資料也補齊。
+
+    ★ TAIFEX 週五/週末特殊屬性：
+      TAIFEX 週五下午開始的盤後（~15:00 Fri → ~05:00 Mon）屬於「跨週末長盤」，
+      官方最終結算數據在 futDataDown 中標記為下週一的日期（而非週五）。
+      週五 17:00 的 taifex_daily 爬蟲只抓到盤中快照（標記在週五日期），
+      必須在週六早上 07:30 追補下週一的日期，才能取得正確終盤收盤價。
+
+    一般情況（Tue-Fri）：用 OpenAPI run_latest() + options(yesterday)
+    週六（Sat）：額外補爬 date.today()+2（下週一）的期貨 + 選擇權終盤，同時刪除週五的錯誤快照
     """
     from agents import taifex_futures, taifex_options
-    yesterday = date.today() - timedelta(days=1)
+
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+
     log.info("用 OpenAPI 補爬最新期貨終盤資料（預期 trade_date=%s）", yesterday)
     taifex_futures.run_latest()
     log.info("補爬選擇權資料 trade_date=%s", yesterday)
     taifex_options.run(yesterday)
+
+    # 週六特殊：週五的盤後結算數據在 TAIFEX 標記為下週一
+    if today.weekday() == 5:  # Saturday
+        next_monday = today + timedelta(days=2)
+        log.info("[週六特殊] 補爬 %s（週五盤後終盤，TAIFEX 標記為下週一）", next_monday)
+        taifex_futures.run(next_monday)
+        taifex_options.run(next_monday)
+        # 刪除週五的盤中快照（錯誤數據），保留下週一的正確終盤
+        from agents.db import get_connection
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM tx_futures_daily WHERE trade_date = %s AND session = '盤後'",
+                    (yesterday,)
+                )
+                deleted = cur.rowcount
+                cur.execute(
+                    "DELETE FROM txo_options_daily WHERE trade_date = %s AND session = '盤後'",
+                    (yesterday,)
+                )
+                deleted += cur.rowcount
+                conn.commit()
+            log.info("[週六特殊] 刪除週五(%s)盤後快照 %d 筆，保留週一(%s)終盤數據",
+                     yesterday, deleted, next_monday)
+        except Exception as e:
+            log.error("[週六特殊] 刪除週五快照失敗: %s", e)
+            conn.rollback()
+        finally:
+            conn.close()
 
 
 def run_night_report(ds: str, params: dict = None, **context):
