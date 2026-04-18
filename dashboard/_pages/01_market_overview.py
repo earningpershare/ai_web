@@ -29,26 +29,52 @@ if _ns and _ns.get("night_session"):
     _td = _ns.get("trade_date", "—")
     _day = _ns.get("day_session") or {}
     _night = _ns.get("night_session") or {}
-    _gap = _ns.get("gap_day_to_night")
-    _gap_pct = _ns.get("gap_day_to_night_pct")
     _opt = _ns.get("options_night_summary") or {}
-    _gap_color = "#EF5350" if (_gap or 0) < 0 else "#66BB6A" if (_gap or 0) > 0 else "#888"
-    _gap_sign = "+" if (_gap or 0) > 0 else ""
 
-    _ns_cols = st.columns(4)
-    _ns_cols[0].metric("夜盤收盤", f"{_night.get('close', '—'):,.0f}" if _night.get("close") else "—",
-                       delta=None)
-    _ns_cols[1].metric("日盤→夜盤缺口",
-                       f"{_gap_sign}{_gap:,.0f} 點" if _gap is not None else "—",
-                       delta=f"{_gap_sign}{_gap_pct:.2f}%" if _gap_pct is not None else None,
-                       delta_color="normal" if (_gap or 0) >= 0 else "inverse")
-    _ns_cols[2].metric("夜盤成交量", f"{_night.get('volume', 0):,}" if _night.get("volume") else "—")
+    _day_close = _day.get("close")
+    _night_close = _night.get("close")
+    _gap_open = _ns.get("gap_day_to_night_open")
+    _gap_open_pct = _ns.get("gap_day_to_night_open_pct")
+    _gap_close = _ns.get("gap_day_to_night")
+    _gap_close_pct = _ns.get("gap_day_to_night_pct")
+
+    def _sign(v): return "+" if (v or 0) > 0 else ""
+    def _fmt_pt(v): return f"{_sign(v)}{v:,.0f} 點" if v is not None else "—"
+    def _fmt_pct(v): return f"{_sign(v)}{v:.2f}%" if v is not None else None
+
+    _ns_cols = st.columns(5)
+
+    _ns_cols[0].metric(
+        "日盤收盤",
+        f"{_day_close:,.0f}" if _day_close else "—",
+        help="當日日盤（一般）近月 TX 收盤價",
+    )
+    _ns_cols[1].metric(
+        "跳空缺口（開盤）",
+        _fmt_pt(_gap_open),
+        delta=_fmt_pct(_gap_open_pct),
+        delta_color="normal" if (_gap_open or 0) >= 0 else "inverse",
+        help="夜盤開盤價 − 日盤收盤價，代表實際跳空幅度",
+    )
+    _ns_cols[2].metric(
+        "夜盤收盤（淨變化）",
+        f"{_night_close:,.0f}" if _night_close else "—",
+        delta=_fmt_pt(_gap_close) + (f"（{_fmt_pct(_gap_close_pct)}）" if _gap_close_pct else ""),
+        delta_color="normal" if (_gap_close or 0) >= 0 else "inverse",
+        help="夜盤收盤價，括號內為相對日盤收盤的淨變化",
+    )
+    _ns_cols[3].metric(
+        "夜盤成交量",
+        f"{_night.get('volume', 0):,}" if _night.get("volume") else "—",
+    )
     _cv = _opt.get("call_volume") or 0
     _pv = _opt.get("put_volume") or 0
     _pcr = (_pv / _cv) if _cv else None
-    _ns_cols[3].metric("夜盤選擇權 P/C Ratio",
-                       f"{_pcr:.2f}" if _pcr is not None else "—",
-                       help=f"Call {_cv:,} / Put {_pv:,}")
+    _ns_cols[4].metric(
+        "選擇權 P/C Ratio",
+        f"{_pcr:.2f}" if _pcr is not None else "—",
+        help=f"夜盤選擇權　Call {_cv:,} / Put {_pv:,}",
+    )
     st.caption(f"資料日期：{_td}　|　夜盤 15:00~次日 05:00　|　詳細分析見 [市場進階分析](/analysis)（Pro）")
 else:
     st.caption("目前無最新夜盤資料。")
