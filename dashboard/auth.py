@@ -131,6 +131,41 @@ def show_login_modal():
                 st.rerun()
         return
 
+    # ── Google 一鍵登入 ───────────────────────────────────────────
+    _gid = os.getenv("GOOGLE_CLIENT_ID", "")
+    if _gid:
+        components.html(
+            f"""
+            <script src="https://accounts.google.com/gsi/client" async></script>
+            <div id="g_id_onload"
+                 data-client_id="{_gid}"
+                 data-callback="onGoogleAuth"
+                 data-auto_prompt="false">
+            </div>
+            <div style="display:flex;justify-content:center;margin:4px 0 2px;">
+              <div class="g_id_signin"
+                   data-type="standard"
+                   data-size="large"
+                   data-theme="filled_blue"
+                   data-text="signin_with"
+                   data-shape="rectangular"
+                   data-logo_alignment="left"
+                   data-width="280">
+              </div>
+            </div>
+            <script>
+            function onGoogleAuth(resp) {{
+              window.top.location.href = '/?_google_credential=' + encodeURIComponent(resp.credential);
+            }}
+            </script>
+            """,
+            height=60,
+        )
+        st.markdown(
+            '<div style="text-align:center;color:#666;font-size:12px;margin:4px 0 8px">── 或使用 Email 登入 ──</div>',
+            unsafe_allow_html=True,
+        )
+
     # ── 正常登入 / 註冊 tabs ──────────────────────────────────────
     tab_login, tab_reg = st.tabs(["登入", "註冊"])
 

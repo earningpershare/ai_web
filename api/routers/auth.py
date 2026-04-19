@@ -358,8 +358,83 @@ class RedeemPromoBody(BaseModel):
     promo_code: str
 
 
+class GoogleOAuthRequest(BaseModel):
+    credential: str  # Google One Tap ID token (JWT)
+
+
 class ResendByEmailRequest(BaseModel):
     email: EmailStr
+
+
+@router.post("/google-oauth")
+def google_oauth(body: GoogleOAuthRequest, request: Request):
+    """Google One Tap → Supabase sign_in_with_id_token；自動建立 user_profile"""
+    if not body.credential:
+        raise HTTPException(status_code=422, detail="缺少 Google credential")
+
+    sb = get_supabase()
+    try:
+        resp = sb.auth.sign_in_with_id_token({
+            "provider": "google",
+            "token": body.credential,
+        })
+    except Exception as e:
+        log.error("Google OAuth sign_in_with_id_token error: %s", e)
+        raise HTTPException(status_code=401, detail="Google 登入驗證失敗，請稍後再試")
+
+    user = resp.user
+    session = resp.session
+    if not user or not session:
+        raise HTTPException(status_code=401, detail="Google 登入失敗")
+
+    sb.postgrest.auth(os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+    user_id = str(user.id)
+    email = user.email or ""
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
+
+    profile_resp = sb.table("user_profiles").select("id, plan, login_count").eq("id", user_id).execute()
+    if not profile_resp.data:
+        # 首次 Google 登入 → 建立 profile
+        display_name = (user.user_metadata or {}).get("full_name") or email.split("@")[0]
+        sb.table("user_profiles").insert({
+            "id": user_id,
+            "display_name": display_name,
+            "plan": "free",
+            "referral_source": "google_oauth",
+        }).execute()
+        sb.table("subscription_events").insert({
+            "user_id": user_id,
+            "event_type": "registered",
+            "to_plan": "free",
+            "ip_address": ip,
+            "user_agent": ua,
+        }).execute()
+    else:
+        profile = profile_resp.data[0]
+        sb.table("user_profiles").update({
+            "last_login_at": datetime.now(timezone.utc).isoformat(),
+            "login_count": (profile.get("login_count") or 0) + 1,
+        }).eq("id", user_id).execute()
+
+    sb.table("subscription_events").insert({
+        "user_id": user_id,
+        "event_type": "login",
+        "ip_address": ip,
+        "user_agent": ua,
+    }).execute()
+
+    _get_active_subscription(user_id)
+    final_profile = _get_profile(user_id)
+    plan = final_profile.get("plan", "free")
+
+    return {
+        "token": session.access_token,
+        "plan": plan,
+        "email": email,
+        "email_verified": True,
+    }
 
 
 @router.post("/redeem-promo")

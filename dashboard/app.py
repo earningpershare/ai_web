@@ -27,6 +27,32 @@ st.set_page_config(
 if "_pending_set_cookie" in st.session_state:
     _set_cookie(st.session_state.pop("_pending_set_cookie"))
 
+# ── Google One Tap 回調：攜帶 credential JWT 的頁面重定向 ─────────────────────
+if "_google_credential" in st.query_params and not is_logged_in():
+    _cred = st.query_params.get("_google_credential", "")
+    st.query_params.clear()
+    if _cred:
+        try:
+            r = requests.post(
+                f"{API_URL}/auth/google-oauth",
+                json={"credential": _cred},
+                timeout=15,
+            )
+            if r.ok:
+                data = r.json()
+                st.session_state["token"] = data["token"]
+                st.session_state["email"] = data["email"]
+                st.session_state["plan"] = data["plan"]
+                st.session_state["email_verified"] = data.get("email_verified", True)
+                st.session_state["_pending_set_cookie"] = data["token"]
+                st.toast(f"✅ 已以 Google 帳號登入：{data['email']}", icon="✅")
+                st.rerun()
+            else:
+                detail = (r.json().get("detail", "Google 登入失敗") if r.headers.get("content-type", "").startswith("application/json") else "Google 登入失敗")
+                st.error(f"Google 登入失敗：{detail}")
+        except Exception as e:
+            st.error(f"Google 登入失敗：{e}")
+
 # ── 從 cookie 還原 session（在 navigation 之前執行）──────────────────────────
 if not is_logged_in() and not st.session_state.get("_logged_out"):
     restore_token = _get_saved_token()
