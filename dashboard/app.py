@@ -33,18 +33,18 @@ if "_gt" in st.query_params and not is_logged_in():
     st.query_params.clear()
     if _token:
         try:
-            r = requests.get(
-                f"{API_URL}/auth/me",
-                headers={"Authorization": f"Bearer {_token}"},
-                timeout=10,
+            r = requests.post(
+                f"{API_URL}/auth/google-session",
+                json={"access_token": _token},
+                timeout=15,
             )
             if r.ok:
                 data = r.json()
-                st.session_state["token"] = _token
+                st.session_state["token"] = data["token"]
                 st.session_state["email"] = data["email"]
                 st.session_state["plan"] = data["plan"]
-                st.session_state["email_verified"] = data.get("email_verified", True)
-                st.session_state["_pending_set_cookie"] = _token
+                st.session_state["email_verified"] = True
+                st.session_state["_pending_set_cookie"] = data["token"]
                 st.toast(f"✅ 已以 Google 帳號登入：{data['email']}", icon="✅")
                 st.rerun()
             else:

@@ -396,6 +396,67 @@ if (token) {{
 </body></html>""")
 
 
+class GoogleSessionRequest(BaseModel):
+    access_token: str  # Supabase access_token from OAuth redirect fragment
+
+
+@router.post("/google-session")
+def google_session(body: GoogleSessionRequest, request: Request):
+    """OAuth redirect 完成後，驗證 Supabase token、自動建立 profile、回傳 session"""
+    if not body.access_token:
+        raise HTTPException(status_code=422, detail="缺少 access_token")
+
+    sb = get_supabase()
+    try:
+        user_resp = sb.auth.get_user(body.access_token)
+        if not user_resp or not user_resp.user:
+            raise HTTPException(status_code=401, detail="無效 token")
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("google_session get_user error: %s", e)
+        raise HTTPException(status_code=401, detail="Token 驗證失敗，請重新登入")
+
+    sb.postgrest.auth(os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+    user = user_resp.user
+    user_id = str(user.id)
+    email = user.email or ""
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
+
+    profile_resp = sb.table("user_profiles").select("id, plan, login_count").eq("id", user_id).maybe_single().execute()
+    if not profile_resp.data:
+        display_name = (user.user_metadata or {}).get("full_name") or email.split("@")[0]
+        sb.table("user_profiles").insert({
+            "id": user_id,
+            "display_name": display_name,
+            "plan": "free",
+            "referral_source": "google_oauth",
+        }).execute()
+        sb.table("subscription_events").insert({
+            "user_id": user_id, "event_type": "registered",
+            "to_plan": "free", "ip_address": ip, "user_agent": ua,
+        }).execute()
+        plan = "free"
+    else:
+        profile = profile_resp.data
+        sb.table("user_profiles").update({
+            "last_login_at": datetime.now(timezone.utc).isoformat(),
+            "login_count": (profile.get("login_count") or 0) + 1,
+        }).eq("id", user_id).execute()
+        _get_active_subscription(user_id)
+        refreshed = sb.table("user_profiles").select("plan").eq("id", user_id).maybe_single().execute()
+        plan = (refreshed.data or {}).get("plan", profile.get("plan", "free"))
+
+    sb.table("subscription_events").insert({
+        "user_id": user_id, "event_type": "login",
+        "ip_address": ip, "user_agent": ua,
+    }).execute()
+
+    return {"token": body.access_token, "plan": plan, "email": email, "email_verified": True}
+
+
 class GoogleOAuthRequest(BaseModel):
     credential: str  # Google One Tap ID token (JWT)
 
