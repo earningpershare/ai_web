@@ -27,7 +27,24 @@ st.set_page_config(
 if "_pending_set_cookie" in st.session_state:
     _set_cookie(st.session_state.pop("_pending_set_cookie"))
 
-# ── Google OAuth 回調：Supabase → /auth/google-done → /?_gt=TOKEN ────────────
+# ── Supabase OAuth fragment 轉換：16888u.com/#access_token=... → /?_gt=... ──
+# Supabase 直接把 token 放在 fragment，JS 讀出後轉成 query param 讓 Streamlit 處理
+if not is_logged_in() and "_gt" not in st.query_params:
+    _components.html(
+        """<script>
+        try {
+            var h = (window.top || window).location.hash;
+            if (h && h.indexOf('access_token=') > -1) {
+                var p = new URLSearchParams(h.replace(/^#/, ''));
+                var t = p.get('access_token');
+                if (t) (window.top || window).location.replace('/?_gt=' + encodeURIComponent(t));
+            }
+        } catch(e) {}
+        </script>""",
+        height=1,
+    )
+
+# ── Google OAuth 回調：Supabase → /?_gt=TOKEN ────────────────────────────────
 if "_gt" in st.query_params and not is_logged_in():
     _token = st.query_params.get("_gt", "")
     if _token:
