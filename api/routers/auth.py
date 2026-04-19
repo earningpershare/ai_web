@@ -14,6 +14,7 @@ import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Header, Request
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr
 
 from routers.supabase_client import get_supabase
@@ -356,6 +357,43 @@ def vless_clients(secret: str = ""):
 
 class RedeemPromoBody(BaseModel):
     promo_code: str
+
+
+@router.get("/google-login")
+def google_login():
+    """瀏覽器點擊 → 跳轉 Google OAuth → Supabase callback → /auth/google-done"""
+    sb = get_supabase()
+    api_public_url = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
+    resp = sb.auth.sign_in_with_oauth({
+        "provider": "google",
+        "options": {
+            "redirect_to": f"{api_public_url}/auth/google-done",
+            "scopes": "email profile",
+        },
+    })
+    return RedirectResponse(url=resp.url)
+
+
+@router.get("/google-done")
+def google_done():
+    """Supabase 回調後，JS 從 URL fragment 取出 access_token 轉交給 Streamlit"""
+    frontend_url = os.getenv("FRONTEND_URL", "https://16888u.com")
+    return HTMLResponse(content=f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>登入中...</title>
+<style>body{{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0e1117;color:#ccc}}</style>
+</head><body>
+<p>正在完成 Google 登入，請稍候...</p>
+<script>
+var hash = window.location.hash.substring(1);
+var params = new URLSearchParams(hash);
+var token = params.get('access_token');
+if (token) {{
+  window.location.replace('{frontend_url}/?_gt=' + encodeURIComponent(token));
+}} else {{
+  window.location.replace('{frontend_url}/?_gt_error=1');
+}}
+</script>
+</body></html>""")
 
 
 class GoogleOAuthRequest(BaseModel):
