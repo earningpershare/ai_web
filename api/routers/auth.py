@@ -361,17 +361,14 @@ class RedeemPromoBody(BaseModel):
 
 @router.get("/google-login")
 def google_login():
-    """瀏覽器點擊 → 跳轉 Google OAuth → Supabase callback → /auth/google-done"""
-    sb = get_supabase()
+    """瀏覽器點擊 → 跳轉 Supabase authorize → Google OAuth → Supabase callback → /auth/google-done"""
+    from urllib.parse import urlencode
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
     api_public_url = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
-    resp = sb.auth.sign_in_with_oauth({
-        "provider": "google",
-        "options": {
-            "redirect_to": f"{api_public_url}/auth/google-done",
-            "scopes": "email profile",
-        },
-    })
-    return RedirectResponse(url=resp.url)
+    redirect_to = f"{api_public_url}/auth/google-done"
+    # 直接構建 Supabase authorize URL，不透過 Python SDK（避免 SDK 誤將 redirect_to 傳給 Google）
+    url = f"{supabase_url}/auth/v1/authorize?{urlencode({'provider': 'google', 'redirect_to': redirect_to})}"
+    return RedirectResponse(url=url)
 
 
 @router.get("/google-done")
