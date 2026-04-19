@@ -47,6 +47,8 @@ if not is_logged_in() and "_gt" not in st.query_params:
 # ── Google OAuth 回調：Supabase → /?_gt=TOKEN ────────────────────────────────
 if "_gt" in st.query_params and not is_logged_in():
     _token = st.query_params.get("_gt", "")
+    _gt_ok = False
+    _gt_err = None
     if _token:
         try:
             r = requests.post(
@@ -61,15 +63,16 @@ if "_gt" in st.query_params and not is_logged_in():
                 st.session_state["plan"] = data["plan"]
                 st.session_state["email_verified"] = True
                 st.session_state["_pending_set_cookie"] = data["token"]
-                st.query_params.clear()  # clear 放在 rerun 前，避免提前觸發重渲染
-                st.toast(f"✅ 已以 Google 帳號登入：{data['email']}", icon="✅")
-                st.rerun()
+                _gt_ok = True
             else:
-                st.query_params.clear()
-                st.error("Google 登入失敗，請稍後再試")
+                _gt_err = "Google 登入失敗，請稍後再試"
         except Exception as e:
-            st.query_params.clear()
-            st.error(f"Google 登入失敗：{e}")
+            _gt_err = f"Google 登入失敗：{e}"
+    st.query_params.clear()
+    if _gt_ok:
+        st.rerun()  # 移出 try/except，避免 RerunException 被捕捉
+    elif _gt_err:
+        st.error(_gt_err)
 elif st.query_params.get("_gt_error"):
     st.query_params.clear()
     st.error("Google 登入失敗，請稍後再試")
