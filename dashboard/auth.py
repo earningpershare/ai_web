@@ -28,20 +28,47 @@ _LS_KEY = "taifex_auth_token"          # localStorage key（更可靠）
 _COOKIE_MAX_AGE = 30 * 24 * 60 * 60  # 30 天
 
 
+def _cookie_domain_attr() -> str:
+    """依 API_URL 推 apex domain，回傳 JS cookie string 的 ;Domain=... 片段。
+    生產（api.16888u.com）→ ';Domain=16888u.com'；localhost → ''（host-only）。
+    與後端 /auth/google-finalize 的 Set-Cookie Domain 對齊，確保 email/pw 與 Google 兩條登入路徑寫進同一個 cookie slot（避免 name 相同但 domain 不同造成重複 cookie）。"""
+    from urllib.parse import urlparse
+    host = urlparse(API_URL).hostname or ""
+    if host in ("localhost", "127.0.0.1") or not host:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    apex = ".".join(parts[-2:]) if len(parts) >= 2 else host
+    return f";Domain={apex}"
+
+
 def _set_cookie(token: str):
-    """用 JS 寫入 cookie。必須在 app.py 頂層呼叫，不可在 @st.dialog 內呼叫。"""
+    """用 JS 寫入 cookie。必須在 app.py 頂層呼叫，不可在 @st.dialog 內呼叫。
+    使用 window.top.document 避免 iframe 被瀏覽器視為第三方 context 鎖 cookie；
+    設 Domain=apex 讓 dashboard 與 api 子網域共用同一個 cookie，與後端 Google OAuth 路徑一致。
+    寫入前先清歷史 host-only 變體，避免同名 cookie 重複造成讀取錯亂。"""
+    dom = _cookie_domain_attr()
+    cookie_str = f"{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax{dom}"
+    legacy_clear = f"{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax"  # no Domain = host-only
     components.html(
-        f'<script>document.cookie="{_COOKIE_KEY}={token};path=/;max-age={_COOKIE_MAX_AGE};SameSite=Lax";</script>',
+        f'<script>try{{var d=(window.top||window).document;d.cookie="{legacy_clear}";d.cookie="{cookie_str}";}}catch(e){{document.cookie="{legacy_clear}";document.cookie="{cookie_str}";}}</script>',
         height=1,
     )
 
 
 def _delete_cookie():
-    """用 JS 清除 cookie。必須在 app.py 頂層呼叫，不可在 @st.dialog 內呼叫。"""
-    components.html(
-        f'<script>document.cookie="{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax";</script>',
-        height=1,
-    )
+    """清除 cookie — 同時清 host-only 與 Domain=apex 兩種變體，覆蓋歷史 cookie。"""
+    dom = _cookie_domain_attr()
+    base = f"{_COOKIE_KEY}=;path=/;max-age=0;SameSite=Lax"
+    statements = [f'(window.top||window).document.cookie="{base}"']
+    if dom:
+        statements.append(f'(window.top||window).document.cookie="{base}{dom}"')
+    fallback = [f'document.cookie="{base}"']
+    if dom:
+        fallback.append(f'document.cookie="{base}{dom}"')
+    js = f'<script>try{{{";".join(statements)};}}catch(e){{{";".join(fallback)};}}</script>'
+    components.html(js, height=1)
 
 
 def _get_saved_token() -> str | None:

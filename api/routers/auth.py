@@ -34,6 +34,20 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "https://16888u.com")
 PLAN_RANK = {"free": 0, "pro": 1, "ultimate": 2}
 
 
+def _cookie_domain() -> str:
+    """從 FRONTEND_URL 推算 cookie 的 Domain 屬性。
+    生產環境（16888u.com）：回 '16888u.com' 讓 dashboard 與 api 子網域都能讀同一個 cookie。
+    localhost：回空字串，cookie 改為 host-only。"""
+    from urllib.parse import urlparse
+    host = urlparse(FRONTEND_URL).hostname or ""
+    if host in ("localhost", "127.0.0.1") or not host:
+        return ""
+    if host.startswith("www."):
+        host = host[4:]
+    parts = host.split(".")
+    return ".".join(parts[-2:]) if len(parts) >= 2 else host
+
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _current_user(authorization: str) -> dict:
@@ -373,24 +387,113 @@ def google_login():
 
 @router.get("/google-done")
 def google_done():
-    """Supabase 回調後，JS 從 URL fragment 取出 access_token 轉交給 Streamlit"""
+    """Supabase OAuth callback 回來後，JS 從 URL fragment 取出 access_token，
+    改用 POST 表單送到 /auth/google-finalize（伺服器端用 Set-Cookie 寫 session，
+    避免 Streamlit iframe 內 JS 寫 cookie 在 Safari ITP / Firefox Total Cookie Protection 下被靜默丟棄）。"""
+    api_public_url = os.getenv("API_PUBLIC_URL", "https://api.16888u.com")
     frontend_url = os.getenv("FRONTEND_URL", "https://16888u.com")
     return HTMLResponse(content=f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>登入中...</title>
 <style>body{{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0e1117;color:#ccc}}</style>
 </head><body>
 <p>正在完成 Google 登入，請稍候...</p>
+<form id="f" method="POST" action="{api_public_url}/auth/google-finalize" style="display:none">
+  <input type="hidden" name="access_token" value="">
+</form>
 <script>
-var hash = window.location.hash.substring(1);
-var params = new URLSearchParams(hash);
-var token = params.get('access_token');
-if (token) {{
-  window.location.replace('{frontend_url}/?_gt=' + encodeURIComponent(token));
-}} else {{
-  window.location.replace('{frontend_url}/?_gt_error=1');
-}}
+(function() {{
+  var hash = window.location.hash.substring(1);
+  var params = new URLSearchParams(hash);
+  var token = params.get('access_token');
+  if (token) {{
+    var f = document.getElementById('f');
+    f.elements['access_token'].value = token;
+    f.submit();
+  }} else {{
+    window.location.replace('{frontend_url}/?_gt_error=1');
+  }}
+}})();
 </script>
 </body></html>""")
+
+
+@router.post("/google-finalize")
+async def google_finalize(request: Request):
+    """OAuth 最終處理：驗證 Supabase token、建立/更新 user_profile、
+    以 HTTP Set-Cookie (Domain=16888u.com) 寫入 session、302 回 dashboard。
+
+    為什麼改用伺服器端 Set-Cookie：
+    - Streamlit components.html 的 srcdoc iframe 在 Safari ITP / Firefox TCP / Brave 下
+      可能被視為第三方 context，document.cookie 寫入會被靜默丟棄
+    - 伺服器直接 Set-Cookie 在 top-level navigation 回應上，所有瀏覽器都會接受
+    - Domain=16888u.com 讓 cookie 在 dashboard (16888u.com) 與 api (api.16888u.com) 都可讀"""
+    frontend_url = os.getenv("FRONTEND_URL", "https://16888u.com")
+
+    form = await request.form()
+    access_token = (form.get("access_token") or "").strip()
+    if not access_token:
+        return RedirectResponse(url=f"{frontend_url}/?_gt_error=1", status_code=302)
+
+    sb = get_supabase()
+    try:
+        user_resp = sb.auth.get_user(access_token)
+        if not user_resp or not user_resp.user:
+            return RedirectResponse(url=f"{frontend_url}/?_gt_error=1", status_code=302)
+    except Exception as e:
+        log.error("google_finalize get_user error: %s", e)
+        return RedirectResponse(url=f"{frontend_url}/?_gt_error=1", status_code=302)
+
+    sb.postgrest.auth(os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""))
+
+    user = user_resp.user
+    user_id = str(user.id)
+    email = user.email or ""
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent", "")
+
+    try:
+        profile_resp = sb.table("user_profiles").select("id, plan, login_count").eq("id", user_id).maybe_single().execute()
+        if not profile_resp.data:
+            display_name = (user.user_metadata or {}).get("full_name") or email.split("@")[0]
+            sb.table("user_profiles").insert({
+                "id": user_id, "display_name": display_name, "plan": "free",
+                "referral_source": "google_oauth",
+            }).execute()
+            sb.table("subscription_events").insert({
+                "user_id": user_id, "event_type": "registered",
+                "to_plan": "free", "ip_address": ip, "user_agent": ua,
+            }).execute()
+        else:
+            profile = profile_resp.data
+            sb.table("user_profiles").update({
+                "last_login_at": datetime.now(timezone.utc).isoformat(),
+                "login_count": (profile.get("login_count") or 0) + 1,
+            }).eq("id", user_id).execute()
+            _get_active_subscription(user_id)
+
+        sb.table("subscription_events").insert({
+            "user_id": user_id, "event_type": "login",
+            "ip_address": ip, "user_agent": ua,
+        }).execute()
+    except Exception as e:
+        log.error("google_finalize profile/event error: %s", e)
+        # profile 處理失敗不阻擋登入（session 仍可用），但記 log 以便追查
+
+    resp = RedirectResponse(url=f"{frontend_url}/", status_code=302)
+    cookie_kwargs = {
+        "key": "auth_token",
+        "value": access_token,
+        "max_age": 30 * 24 * 60 * 60,
+        "path": "/",
+        "secure": frontend_url.startswith("https://"),
+        "httponly": False,  # Streamlit 前端登出時需用 JS 清除
+        "samesite": "lax",
+    }
+    domain = _cookie_domain()
+    if domain:
+        cookie_kwargs["domain"] = domain
+    resp.set_cookie(**cookie_kwargs)
+    return resp
 
 
 class GoogleSessionRequest(BaseModel):
