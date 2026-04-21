@@ -46,6 +46,17 @@ st.divider()
 
 cur_plan = current_plan()
 
+# 取得訂閱細節（只在已登入且非免費方案時才呼叫，用來判斷是否顯示取消按鈕）
+_me_sub = None
+if is_logged_in() and cur_plan != "free":
+    try:
+        token = st.session_state.get("token", "")
+        _r = _requests.get(f"{API_URL}/auth/me", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if _r.ok:
+            _me_sub = _r.json().get("subscription")
+    except Exception:
+        pass
+
 
 def _checkout_url(plan_key: str) -> str:
     """回傳一鍵付款 URL，點擊即建立訂單並跳轉至綠界"""
@@ -181,7 +192,7 @@ st.divider()
 
 # ── 取消訂閱 ─────────────────────────────────────────────────────────────────
 
-if is_logged_in() and cur_plan == "pro":
+if is_logged_in() and _me_sub and _me_sub.get("status") == "active":
     with st.expander("⚙️ 管理訂閱"):
         st.markdown("**取消定期扣款**")
         st.caption("取消後仍可使用至當期到期日，到期後自動降回基礎版，不會再扣款。")
