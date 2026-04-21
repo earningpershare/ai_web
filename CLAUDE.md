@@ -5,7 +5,7 @@
 ## 架構
 
 ```
-dashboard/   Streamlit 1.35 前端 (port 8501)
+dashboard/   Streamlit 1.37 前端 (port 8501)
 api/         FastAPI 後端 (port 8000)
 airflow/     Apache Airflow 排程 (DAGs)
 crawler/     資料爬蟲
@@ -15,7 +15,7 @@ deploy.sh    一鍵部署到 VPS
 
 ## 技術棧
 
-- **前端**: Streamlit 1.35（注意：用 `@st.experimental_dialog` 非 `@st.dialog`）
+- **前端**: Streamlit 1.37（用 `@st.dialog`，`@st.experimental_dialog` 已移除）
 - **後端**: FastAPI，所有 router 同時掛 `/endpoint` 和 `/v1/endpoint`
 - **金融資料 DB**: PostgreSQL 16 (Docker local)
 - **會員/Auth**: Supabase（個資與金融資料物理隔離）

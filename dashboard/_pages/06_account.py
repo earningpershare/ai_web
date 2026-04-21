@@ -2,14 +2,14 @@
 帳號管理 — 個人資料 / 訂閱狀態 / 取消訂閱 / 登出
 """
 import streamlit as st
-from auth import auth_sidebar, is_logged_in, show_login_modal, current_plan, _api_get, _api_post_auth, PLAN_LABEL, PLAN_COLOR
+from auth import auth_sidebar, is_logged_in, show_login_modal, _api_get, _api_post_auth, PLAN_LABEL, PLAN_COLOR
 
 
-@st.experimental_dialog("確認取消訂閱")
-def _cancel_confirm_dialog(sub_plan: str, expires: str):
-    st.warning(f"確定要取消 **{sub_plan}** 訂閱嗎？")
+@st.dialog("確認取消訂閱")
+def _cancel_confirm_dialog(plan_label: str, expire_date: str):
+    st.warning(f"確定要取消 **{plan_label}** 訂閱嗎？")
     st.markdown(
-        f"取消後您仍可使用至到期日 **{expires}**，到期後自動降回免費方案。"
+        f"取消後您仍可使用至到期日 **{expire_date}**，到期後自動降回免費方案。"
         "<br>此操作無法復原，若需繼續訂閱請重新付款。",
         unsafe_allow_html=True,
     )
