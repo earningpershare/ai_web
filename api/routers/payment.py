@@ -482,7 +482,7 @@ async def cancel_subscription(authorization: str = Header(default="")):
         sb.table("user_subscriptions")
         .select("id, plan, status")
         .eq("user_id", user_id)
-        .eq("status", "active")
+        .in_("status", ["active", "superseded"])  # superseded = 仍有效但資料狀態異常
         .order("started_at", desc=True)
         .limit(1)
         .execute()
@@ -537,7 +537,7 @@ async def cancel_subscription(authorization: str = Header(default="")):
     # 更新 DB：訂閱狀態改為 cancelled（保留到期日）
     sb.table("user_subscriptions").update({"status": "cancelled"}).eq(
         "user_id", user_id
-    ).eq("status", "active").execute()
+    ).in_("status", ["active", "superseded"]).execute()
 
     sb.table("subscription_events").insert({
         "user_id": user_id,
