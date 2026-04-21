@@ -112,18 +112,20 @@ def run_night_report(ds: str, params: dict = None, **context):
     except Exception as e:
         log.warning("探查夜盤資料失敗（%s），仍嘗試執行", e)
 
-    run(trade_date=trade_date, recipients=recipients)
+    sent = run(trade_date=trade_date, recipients=recipients)
+    # 只有報告真的寄出才通知；skipped (None/False) 不觸發
+    if sent:
+        from airflow.utils.email import send_email
+        actual_td = trade_date or "latest"
+        send_email(
+            to=NOTIFY_EMAIL,
+            subject=f"[✅ 夜盤報告已寄出] taifex_night_report — {actual_td}",
+            html_content=f"<p>夜盤觀察報告（<b>{actual_td}</b>）已成功生成並寄送。</p>",
+        )
 
 
 def dag_night_success_callback(context):
-    from airflow.utils.email import send_email
-    dag_id = context["dag"].dag_id
-    trade_date = context["ds"]
-    send_email(
-        to=NOTIFY_EMAIL,
-        subject=f"[✅ 夜盤報告已寄出] {dag_id} — {trade_date}",
-        html_content=f"<p>執行日期 <b>{trade_date}</b> 夜盤觀察報告已成功生成並寄送。</p>",
-    )
+    pass  # 通知改由 run_night_report 在實際寄出後觸發，避免 skipped 時誤報
 
 
 default_args = {

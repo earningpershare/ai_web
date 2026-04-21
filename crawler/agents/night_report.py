@@ -161,3 +161,4 @@ def run(trade_date: date = None, recipients: list[str] = None):
 
     send_night_report(body_html, actual_td, recipients)
     logger.info("夜盤報告流程完成")
+    return True  # 報告實際寄出；供呼叫端判斷是否需觸發通知

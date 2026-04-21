@@ -999,7 +999,8 @@ def get_night_session(
     # 週五→週一跨週末夜盤：trade_date 為週一，但同日無日盤（日盤在夜盤之後才開）。
     # 以 prev_close（前一交易日收盤）作為缺口基準，反映實際開盤跳空幅度。
     ref_close = day_close if day_close is not None else prev_close
-    ref_date = str(day[0]["trade_date"]) if day else (str(prev_day[0]["trade_date"]) if prev_day else None)
+    # trade_date 已在 scope 中；day query 未 SELECT trade_date，不可從 day[0] 讀取
+    ref_date = str(trade_date) if day else (str(prev_day[0]["trade_date"]) if prev_day else None)
 
     gap_open = (night_open - ref_close) if (ref_close is not None and night_open is not None) else None
     gap_close = (night_close - ref_close) if (ref_close is not None and night_close is not None) else None
