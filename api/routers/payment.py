@@ -104,10 +104,10 @@ def _activate_subscription(sb, user_id: str, plan_key: str, order_no: str,
     else:
         expires = "2099-12-31T23:59:59+00:00"
 
-    # 1. 先把舊的 active 訂閱標為 superseded（避免重複）
+    # 1. 先把舊的 active / cancelled 訂閱標為 superseded（避免重複，含取消後重新訂閱情境）
     sb.table("user_subscriptions").update({"status": "superseded"}).eq(
         "user_id", user_id
-    ).eq("status", "active").execute()
+    ).in_("status", ["active", "cancelled"]).execute()
 
     # 2. 建立新訂閱
     sb.table("user_subscriptions").insert({
@@ -149,7 +149,18 @@ def _build_ecpay_params(user_id: str, plan_key: str) -> tuple[str, dict]:
     if not profile.data:
         raise HTTPException(status_code=400, detail="找不到用戶資料，請重新登入")
     current = profile.data.get("plan", "free")
-    if PLAN_RANK.get(current, 0) >= PLAN_RANK.get(plan_key, 0):
+    # 若目前訂閱已取消，允許重新訂閱同方案（取消後想續訂的情境）
+    active_sub = (
+        sb.table("user_subscriptions")
+        .select("status")
+        .eq("user_id", user_id)
+        .in_("status", ["active", "cancelled", "superseded"])
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    is_cancelled = bool(active_sub.data) and active_sub.data[0]["status"] == "cancelled"
+    if PLAN_RANK.get(current, 0) >= PLAN_RANK.get(plan_key, 0) and not is_cancelled:
         raise HTTPException(status_code=400, detail="您已經是此方案或更高方案的會員")
 
     ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d%H%M%S")
