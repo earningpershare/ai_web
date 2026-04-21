@@ -535,9 +535,16 @@ async def cancel_subscription(authorization: str = Header(default="")):
                 )
             result = r.text.strip()
             log.info("ECPay CancelPeriod: order=%s result=%s", order_no, result)
-            if not result.startswith("1|OK"):
-                if "已終止" not in result and "cancel" not in result.lower():
-                    raise HTTPException(status_code=502, detail=f"綠界取消失敗：{result}")
+            # CreditCardPeriodAction 回傳 query string 格式（RtnCode=1&RtnMsg=停用成功&...）
+            # 不是 notify 的 "1|OK" 格式，需解析 RtnCode
+            from urllib.parse import parse_qs
+            rtn = parse_qs(result)
+            rtn_code = (rtn.get("RtnCode") or [""])[0]
+            rtn_msg = (rtn.get("RtnMsg") or [""])[0]
+            if rtn_code != "1":
+                # 已終止/已取消也算成功
+                if "停用" not in rtn_msg and "終止" not in rtn_msg and "cancel" not in rtn_msg.lower():
+                    raise HTTPException(status_code=502, detail=f"綠界取消失敗：{rtn_msg or result}")
         except HTTPException:
             raise
         except Exception as e:
