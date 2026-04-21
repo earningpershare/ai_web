@@ -20,7 +20,6 @@ import httpx
 
 from fastapi import APIRouter, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
-from pydantic import BaseModel
 
 from routers.supabase_client import get_supabase
 from routers.auth import _current_user, PLAN_RANK
@@ -146,8 +145,10 @@ def _build_ecpay_params(user_id: str, plan_key: str) -> tuple[str, dict]:
     plan = PLANS[plan_key]
     sb = get_supabase()
 
-    profile = sb.table("user_profiles").select("plan").eq("id", user_id).single().execute()
-    current = (profile.data or {}).get("plan", "free")
+    profile = sb.table("user_profiles").select("plan").eq("id", user_id).maybe_single().execute()
+    if not profile.data:
+        raise HTTPException(status_code=400, detail="找不到用戶資料，請重新登入")
+    current = profile.data.get("plan", "free")
     if PLAN_RANK.get(current, 0) >= PLAN_RANK.get(plan_key, 0):
         raise HTTPException(status_code=400, detail="您已經是此方案或更高方案的會員")
 
@@ -269,9 +270,11 @@ async def order_result(request: Request):
     rtn_code = dict(form).get("RtnCode", "")
     if rtn_code == "1":
         return RedirectResponse(f"{FRONTEND_URL}/05_pricing?payment_result=1", status_code=302)
-    else:
-        rtn_msg = dict(form).get("RtnMsg", "付款失敗")
-        return RedirectResponse(f"{FRONTEND_URL}/05_pricing?payment_failed=1&msg={urllib.parse.quote(rtn_msg)}", status_code=302)
+    rtn_msg = dict(form).get("RtnMsg", "付款失敗")
+    return RedirectResponse(
+        f"{FRONTEND_URL}/05_pricing?payment_failed=1&msg={urllib.parse.quote(rtn_msg)}",
+        status_code=302,
+    )
 
 
 # ── 綠界付款結果通知（Server 端回呼）────────────────────────────────────────
@@ -294,15 +297,35 @@ async def payment_notify(request: Request):
 
     rtn_code = params.get("RtnCode", "")
     order_no = params.get("MerchantTradeNo", "")
-    user_id = params.get("CustomField1", "")
-    plan_key = params.get("CustomField2", "")
     trade_no = params.get("TradeNo", "")
 
     sb = get_supabase()
 
+    # 從 DB 取 user_id / plan_key（不信任 CustomField1/2：ECPay 的 CheckMacValue 是對
+    # 瀏覽器送去的值簽名，若用戶改掉 form field 再送，簽名仍合法，但 CustomField1/2 是錯的）
+    order_row = (
+        sb.table("payment_orders")
+        .select("user_id, plan, status, is_periodic")
+        .eq("order_no", order_no)
+        .maybe_single()
+        .execute()
+    )
+    if not order_row.data:
+        log.error("ECPay notify: order %s not found in DB", order_no)
+        return "1|OK"
+
+    user_id  = order_row.data["user_id"]
+    plan_key = order_row.data["plan"]
+
+    # 記錄 CustomField 不一致（異常警示）
+    cb_user = params.get("CustomField1", "")
+    cb_plan = params.get("CustomField2", "")
+    if cb_user != user_id or cb_plan != plan_key:
+        log.warning("ECPay notify: CustomField mismatch order=%s cb_user=%s cb_plan=%s db_user=%s db_plan=%s",
+                    order_no, cb_user, cb_plan, user_id, plan_key)
+
     # 冪等性檢查：避免重複處理（綠界可能重送）
-    existing = sb.table("payment_orders").select("status").eq("order_no", order_no).single().execute()
-    if existing.data and existing.data.get("status") == "paid":
+    if order_row.data.get("status") == "paid":
         log.info("ECPay notify: order %s already paid, skip", order_no)
         return "1|OK"
 
@@ -617,7 +640,6 @@ async def reconcile_pending_orders(
                             "raw_response": result,
                         }).eq("order_no", order_no).execute()
 
-                        plan = PLANS.get(order["plan"], {})
                         _activate_subscription(
                             sb, order["user_id"], order["plan"], order_no,
                             trade_no, order.get("amount", 0), order.get("is_periodic", False),

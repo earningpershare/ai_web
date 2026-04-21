@@ -75,7 +75,7 @@ def _get_profile(user_id: str) -> dict:
 
 
 def _get_active_subscription(user_id: str) -> dict | None:
-    """取得有效訂閱；若已過期則自動降級為 free"""
+    """取得有效訂閱；若已過期則自動降級為 free；若 profile.plan 與訂閱不符則自動修復（self-heal）"""
     sb = get_supabase()
     resp = (
         sb.table("user_subscriptions")
@@ -106,6 +106,19 @@ def _get_active_subscription(user_id: str) -> dict | None:
             }).execute()
             log.info("Subscription expired for user %s, downgraded to free", user_id)
             return None
+
+    # Self-heal：若 _activate_subscription 步驟 ③ 曾因 DB 異常未完成，
+    # user_profiles.plan 可能落後於 user_subscriptions.plan。
+    # 在此補正，避免用戶付款後仍看到舊方案。
+    try:
+        prof = sb.table("user_profiles").select("plan").eq("id", user_id).maybe_single().execute()
+        if prof.data and PLAN_RANK.get(sub["plan"], 0) > PLAN_RANK.get(prof.data.get("plan", "free"), 0):
+            log.warning("plan self-heal: user=%s profile=%s → sub=%s",
+                        user_id, prof.data.get("plan"), sub["plan"])
+            sb.table("user_profiles").update({"plan": sub["plan"]}).eq("id", user_id).execute()
+    except Exception as e:
+        log.warning("plan self-heal failed (non-critical): %s", e)
+
     return sub
 
 
