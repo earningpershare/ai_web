@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
 from routers.supabase_client import get_supabase
 from routers.auth import _current_user, PLAN_RANK
+from subscription_logic import activate_subscription as _activate_sub_logic, check_can_purchase
 
 router = APIRouter(prefix="/payment", tags=["payment"])
 log = logging.getLogger(__name__)
@@ -95,41 +96,8 @@ def _verify_check_mac_value(params: dict) -> bool:
 
 def _activate_subscription(sb, user_id: str, plan_key: str, order_no: str,
                            trade_no: str, amount: int, is_periodic: bool):
-    """
-    將用戶升級到指定方案。所有 DB 操作集中在此函式，
-    即使部分失敗也能根據 payment_orders.raw_response 人工補救。
-    """
-    if is_periodic:
-        expires = (datetime.now(timezone.utc) + timedelta(days=35)).isoformat()
-    else:
-        expires = "2099-12-31T23:59:59+00:00"
-
-    # 1. 先把舊的 active / cancelled 訂閱標為 superseded（避免重複，含取消後重新訂閱情境）
-    sb.table("user_subscriptions").update({"status": "superseded"}).eq(
-        "user_id", user_id
-    ).in_("status", ["active", "cancelled"]).execute()
-
-    # 2. 建立新訂閱
-    sb.table("user_subscriptions").insert({
-        "user_id": user_id,
-        "plan": plan_key,
-        "status": "active",
-        "expires_at": expires,
-        "amount_twd": amount,
-        "promo_code": None,
-        "metadata": {"ecpay_trade_no": trade_no, "order_no": order_no},
-    }).execute()
-
-    # 3. 更新 user_profiles（這是最關鍵的一步）
-    sb.table("user_profiles").update({"plan": plan_key}).eq("id", user_id).execute()
-
-    # 4. 記錄事件
-    sb.table("subscription_events").insert({
-        "user_id": user_id,
-        "event_type": "payment_success",
-        "to_plan": plan_key,
-        "metadata": {"order_no": order_no, "trade_no": trade_no, "amount": amount},
-    }).execute()
+    """委派至 subscription_logic.activate_subscription"""
+    _activate_sub_logic(sb, user_id, plan_key, order_no, trade_no, amount, is_periodic)
 
 
 # ── 建立訂單（內部共用）────────────────────────────────────────────────────
@@ -145,23 +113,9 @@ def _build_ecpay_params(user_id: str, plan_key: str) -> tuple[str, dict]:
     plan = PLANS[plan_key]
     sb = get_supabase()
 
-    profile = sb.table("user_profiles").select("plan").eq("id", user_id).maybe_single().execute()
-    if not profile.data:
-        raise HTTPException(status_code=400, detail="找不到用戶資料，請重新登入")
-    current = profile.data.get("plan", "free")
-    # 若目前訂閱已取消，允許重新訂閱同方案（取消後想續訂的情境）
-    active_sub = (
-        sb.table("user_subscriptions")
-        .select("status")
-        .eq("user_id", user_id)
-        .in_("status", ["active", "cancelled", "superseded"])
-        .order("started_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    is_cancelled = bool(active_sub.data) and active_sub.data[0]["status"] == "cancelled"
-    if PLAN_RANK.get(current, 0) >= PLAN_RANK.get(plan_key, 0) and not is_cancelled:
-        raise HTTPException(status_code=400, detail="您已經是此方案或更高方案的會員")
+    allowed, reason = check_can_purchase(sb, user_id, plan_key)
+    if not allowed:
+        raise HTTPException(status_code=400, detail=reason)
 
     ts = datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d%H%M%S")
     order_no = f"TF{ts}{user_id[:4]}"[:20]

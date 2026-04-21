@@ -18,6 +18,7 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel, EmailStr
 
 from routers.supabase_client import get_supabase
+from subscription_logic import get_active_subscription, activate_subscription, PLAN_RANK as _PLAN_RANK
 
 # 用固定 namespace + user_id 確定性生成 VLESS UUID，不需要 DB 欄位
 _VLESS_NAMESPACE = _uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
@@ -75,51 +76,8 @@ def _get_profile(user_id: str) -> dict:
 
 
 def _get_active_subscription(user_id: str) -> dict | None:
-    """取得有效訂閱；若已過期則自動降級為 free；若 profile.plan 與訂閱不符則自動修復（self-heal）"""
-    sb = get_supabase()
-    resp = (
-        sb.table("user_subscriptions")
-        .select("plan, status, started_at, expires_at")
-        .eq("user_id", user_id)
-        .in_("status", ["active", "cancelled", "superseded"])  # cancelled/superseded = 仍在效期內
-        .order("started_at", desc=True)
-        .limit(1)
-        .execute()
-    )
-    if not resp.data:
-        return None
-
-    sub = resp.data[0]
-    expires = sub.get("expires_at")
-    if expires:
-        expires_dt = datetime.fromisoformat(expires)
-        if expires_dt < datetime.now(timezone.utc):
-            # 訂閱已過期（active 或 cancelled 都一律降級）
-            sb.table("user_subscriptions").update({"status": "expired"}).eq(
-                "user_id", user_id
-            ).in_("status", ["active", "cancelled", "superseded"]).execute()
-            sb.table("user_profiles").update({"plan": "free"}).eq("id", user_id).execute()
-            sb.table("subscription_events").insert({
-                "user_id": user_id,
-                "event_type": "subscription_expired",
-                "to_plan": "free",
-            }).execute()
-            log.info("Subscription expired for user %s, downgraded to free", user_id)
-            return None
-
-    # Self-heal：若 _activate_subscription 步驟 ③ 曾因 DB 異常未完成，
-    # user_profiles.plan 可能落後於 user_subscriptions.plan。
-    # 在此補正，避免用戶付款後仍看到舊方案。
-    try:
-        prof = sb.table("user_profiles").select("plan").eq("id", user_id).maybe_single().execute()
-        if prof.data and PLAN_RANK.get(sub["plan"], 0) > PLAN_RANK.get(prof.data.get("plan", "free"), 0):
-            log.warning("plan self-heal: user=%s profile=%s → sub=%s",
-                        user_id, prof.data.get("plan"), sub["plan"])
-            sb.table("user_profiles").update({"plan": sub["plan"]}).eq("id", user_id).execute()
-    except Exception as e:
-        log.warning("plan self-heal failed (non-critical): %s", e)
-
-    return sub
+    """取得有效訂閱；若已過期則自動降級為 free；若 profile.plan 落後訂閱則 self-heal。"""
+    return get_active_subscription(get_supabase(), user_id)
 
 
 # ── schemas ───────────────────────────────────────────────────────────────────
