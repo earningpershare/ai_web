@@ -81,7 +81,7 @@ def _get_active_subscription(user_id: str) -> dict | None:
         sb.table("user_subscriptions")
         .select("plan, status, started_at, expires_at")
         .eq("user_id", user_id)
-        .eq("status", "active")
+        .in_("status", ["active", "cancelled"])  # cancelled = 仍在效期內，只是不會自動續費
         .order("started_at", desc=True)
         .limit(1)
         .execute()
@@ -94,10 +94,10 @@ def _get_active_subscription(user_id: str) -> dict | None:
     if expires:
         expires_dt = datetime.fromisoformat(expires)
         if expires_dt < datetime.now(timezone.utc):
-            # 訂閱已過期 → 降級
+            # 訂閱已過期（active 或 cancelled 都一律降級）
             sb.table("user_subscriptions").update({"status": "expired"}).eq(
                 "user_id", user_id
-            ).eq("status", "active").execute()
+            ).in_("status", ["active", "cancelled"]).execute()
             sb.table("user_profiles").update({"plan": "free"}).eq("id", user_id).execute()
             sb.table("subscription_events").insert({
                 "user_id": user_id,

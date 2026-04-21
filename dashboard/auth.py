@@ -93,6 +93,17 @@ def _api_post(endpoint: str, body: dict) -> dict:
     return r.json()
 
 
+def _api_post_auth(endpoint: str, body: dict | None = None) -> dict:
+    """帶 Bearer token 的 POST（需已登入）"""
+    token = st.session_state.get("token", "")
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    r = _requests.post(f"{API_URL}{endpoint}", json=body or {}, headers=headers, timeout=15)
+    if not r.ok:
+        detail = r.json().get("detail", "未知錯誤") if r.headers.get("content-type", "").startswith("application/json") else r.text
+        raise ValueError(detail)
+    return r.json()
+
+
 def _api_get(endpoint: str) -> dict:
     token = st.session_state.get("token", "")
     headers = {"Authorization": f"Bearer {token}"} if token else {}

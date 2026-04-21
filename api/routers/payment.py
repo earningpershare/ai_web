@@ -467,94 +467,90 @@ def payment_status(order_no: str, authorization: str = Header(default="")):
 @router.post("/cancel-subscription")
 async def cancel_subscription(authorization: str = Header(default="")):
     """
-    取消使用者的定期定額訂閱。
-    1. 找到最新的 pending/paid 定期訂單，呼叫綠界 CreditCardPeriodAction (Cancel)
-    2. 更新 user_subscriptions 狀態為 cancelled
-    3. 不立即降級（讓用戶用到期為止）
+    取消訂閱（一次性付款或定期定額皆支援）。
+    - 定期定額：先呼叫綠界 CreditCardPeriodAction Cancel 停止續費
+    - 一次性付款：直接更新 DB，不需呼叫綠界
+    - 兩者皆不立即降級，讓用戶用到 expires_at 為止
     """
     user = _current_user(authorization)
     user_id = str(user.id)
 
     sb = get_supabase()
 
-    # 查找有效的定期訂閱對應的付款訂單
+    # 確認有有效訂閱
+    sub_resp = (
+        sb.table("user_subscriptions")
+        .select("id, plan, status")
+        .eq("user_id", user_id)
+        .eq("status", "active")
+        .order("started_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not sub_resp.data:
+        raise HTTPException(status_code=400, detail="您目前沒有有效訂閱")
+
+    sub_plan = sub_resp.data[0]["plan"]
+
+    # 嘗試找定期付款訂單 — 有的話才需要呼叫綠界取消續費
     order_resp = (
         sb.table("payment_orders")
-        .select("order_no, ecpay_trade_no, plan, status")
+        .select("order_no, plan")
         .eq("user_id", user_id)
         .eq("is_periodic", True)
-        .in_("status", ["paid"])
+        .eq("status", "paid")
         .order("created_at", desc=True)
         .limit(1)
         .execute()
     )
+    order = order_resp.data[0] if order_resp.data else None
 
-    if not order_resp.data:
-        raise HTTPException(status_code=404, detail="找不到可取消的定期訂閱")
+    if order:
+        order_no = order["order_no"]
+        ts = str(int(_time()))
+        params = {
+            "MerchantID": ECPAY_MERCHANT_ID,
+            "MerchantTradeNo": order_no,
+            "Action": "Cancel",
+            "TimeStamp": ts,
+        }
+        params["CheckMacValue"] = _generate_check_mac_value(params)
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                r = await client.post(
+                    ECPAY_PERIOD_ACTION_URL,
+                    data=params,
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                )
+            result = r.text.strip()
+            log.info("ECPay CancelPeriod: order=%s result=%s", order_no, result)
+            if not result.startswith("1|OK"):
+                if "已終止" not in result and "cancel" not in result.lower():
+                    raise HTTPException(status_code=502, detail=f"綠界取消失敗：{result}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.error("ECPay CancelPeriod request failed: %s", e)
+            raise HTTPException(status_code=502, detail="無法連線綠界，請稍後再試")
+        sb.table("payment_orders").update({"status": "cancelled"}).eq("order_no", order_no).execute()
 
-    order = order_resp.data[0]
-    order_no = order["order_no"]
-
-    # 確認用戶目前有 active periodic 訂閱
-    sub_resp = (
-        sb.table("user_subscriptions")
-        .select("id, status")
-        .eq("user_id", user_id)
-        .eq("status", "active")
-        .execute()
-    )
-
-    if not sub_resp.data:
-        raise HTTPException(status_code=400, detail="您目前沒有有效訂閱")
-
-    # 呼叫綠界 CreditCardPeriodAction Cancel
-    ts = str(int(_time()))
-    params = {
-        "MerchantID": ECPAY_MERCHANT_ID,
-        "MerchantTradeNo": order_no,
-        "Action": "Cancel",
-        "TimeStamp": ts,
-    }
-    params["CheckMacValue"] = _generate_check_mac_value(params)
-
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(
-                ECPAY_PERIOD_ACTION_URL,
-                data=params,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-        result = r.text.strip()
-        log.info("ECPay CancelPeriod: order=%s result=%s", order_no, result)
-
-        # 綠界回傳 "1|OK" 或含錯誤訊息
-        if not result.startswith("1|OK"):
-            # 若綠界說已取消（可能已手動取消），也允許繼續
-            if "已終止" not in result and "cancel" not in result.lower():
-                raise HTTPException(status_code=502, detail=f"綠界取消失敗：{result}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.error("ECPay CancelPeriod request failed: %s", e)
-        raise HTTPException(status_code=502, detail="無法連線綠界，請稍後再試")
-
-    # 更新 DB：訂閱狀態改為 cancelled（保留到期日，讓用戶用到期）
+    # 更新 DB：訂閱狀態改為 cancelled（保留到期日）
     sb.table("user_subscriptions").update({"status": "cancelled"}).eq(
         "user_id", user_id
     ).eq("status", "active").execute()
 
-    sb.table("payment_orders").update({"status": "cancelled"}).eq(
-        "order_no", order_no
-    ).execute()
-
     sb.table("subscription_events").insert({
         "user_id": user_id,
         "event_type": "subscription_cancelled",
-        "to_plan": order["plan"],
-        "metadata": {"order_no": order_no, "cancelled_by": "user"},
+        "to_plan": sub_plan,
+        "metadata": {
+            "order_no": order["order_no"] if order else None,
+            "cancelled_by": "user",
+            "is_periodic": bool(order),
+        },
     }).execute()
 
-    log.info("Subscription cancelled: user=%s order=%s", user_id, order_no)
+    log.info("Subscription cancelled: user=%s is_periodic=%s", user_id, bool(order))
     return {"ok": True, "message": "訂閱已取消，您可繼續使用至當期到期日"}
 
 
