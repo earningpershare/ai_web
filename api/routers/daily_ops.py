@@ -267,11 +267,11 @@ def trading_ingest(
                     SET title=%s, direction=%s, pnl=%s, pnl_note=%s, content=%s, is_published=TRUE
                     WHERE id=%s RETURNING id
                     """,
-                    (title, direction, pnl_twd, pnl_note, content, existing[0]),
+                    (title, direction, pnl_twd, pnl_note, content, existing["id"]),
                 )
-                row = cur.fetchone()
-                log.info("trading-ingest 更新 id=%s date=%s session=%s", row[0], body.trade_date, body.session)
-                result_id = row[0]
+                row = dict(cur.fetchone())
+                log.info("trading-ingest 更新 id=%s date=%s session=%s", row["id"], body.trade_date, body.session)
+                result_id = row["id"]
                 action = "updated"
             else:
                 cur.execute(
@@ -283,8 +283,8 @@ def trading_ingest(
                     """,
                     (body.trade_date, title, direction, pnl_twd, pnl_note, content),
                 )
-                row = cur.fetchone()
-                result_id = row[0]
+                row = dict(cur.fetchone())
+                result_id = row["id"]
                 log.info("trading-ingest 新增 id=%s date=%s session=%s", result_id, body.trade_date, body.session)
                 action = "created"
         conn.commit()
