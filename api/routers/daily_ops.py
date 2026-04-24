@@ -24,15 +24,18 @@ from .auth import _current_user
 router = APIRouter(prefix="/daily-ops", tags=["daily-ops"])
 log = logging.getLogger(__name__)
 
-ADMIN_EMAIL = "ohmygot65@yahoo.com.tw"
+_DAILY_OPS_EDITORS = {
+    "ohmygot65@yahoo.com.tw",
+    "somehandisfrank@gmail.com",
+}
 
 
 # ── 管理員驗證 ────────────────────────────────────────────────────────────────
 
 def _require_admin(authorization: str):
-    """驗證 token 且確認為管理員帳號"""
+    """驗證 token 且確認為每日操作編輯者"""
     user = _current_user(authorization)
-    if (user.email or "").lower() != ADMIN_EMAIL:
+    if (user.email or "").lower().strip() not in _DAILY_OPS_EDITORS:
         raise HTTPException(status_code=403, detail="此操作僅限管理員")
     return user
 

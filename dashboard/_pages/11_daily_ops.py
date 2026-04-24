@@ -9,10 +9,10 @@ from auth import auth_sidebar, is_logged_in
 
 auth_sidebar()
 
-ADMIN_EMAIL = "ohmygot65@yahoo.com.tw"
+_EDITORS = {"ohmygot65@yahoo.com.tw", "somehandisfrank@gmail.com"}
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 
-is_admin = is_logged_in() and st.session_state.get("email", "").lower() == ADMIN_EMAIL
+is_admin = is_logged_in() and st.session_state.get("email", "").lower().strip() in _EDITORS
 token = st.session_state.get("token", "")
 headers = {"Authorization": f"Bearer {token}"}
 
