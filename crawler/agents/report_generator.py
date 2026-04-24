@@ -489,15 +489,23 @@ def _get_paid_member_emails() -> list[str]:
         sb = create_client(url, key)
         sb.postgrest.auth(key)
 
-        # 查詢所有 active 的 pro/ultimate 訂閱
+        # 查詢所有有效的 pro/ultimate 訂閱（cancelled = 取消但未到期，仍應收到報告）
         resp = (
             sb.table("user_subscriptions")
-            .select("user_id")
+            .select("user_id, status, expires_at")
             .in_("plan", ["pro", "ultimate"])
-            .eq("status", "active")
+            .in_("status", ["active", "cancelled", "superseded"])
             .execute()
         )
-        user_ids = [row["user_id"] for row in (resp.data or [])]
+        from datetime import datetime, timezone as _tz
+        now = datetime.now(_tz.utc)
+        # 過濾掉已到期的 cancelled/superseded（active 無到期日，直接保留）
+        valid_rows = []
+        for row in (resp.data or []):
+            exp = row.get("expires_at")
+            if not exp or datetime.fromisoformat(exp) > now:
+                valid_rows.append(row)
+        user_ids = [row["user_id"] for row in valid_rows]
 
         # 透過 admin API 取得每個 user 的 email
         emails = []
