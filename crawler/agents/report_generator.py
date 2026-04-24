@@ -449,26 +449,27 @@ def _wrap_email_html(content: str, trade_date: str) -> str:
 
 
 def send_report_email(report_html: str, trade_date: str, recipients: list[str]):
-    """透過 Gmail SMTP 寄送報告"""
+    """透過 Gmail SMTP 個別寄送報告（避免收件人互相看到彼此 email）"""
     if not recipients:
         logger.warning("無收件人，跳過寄送")
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"【台指籌碼觀察】{trade_date} 市場數據報告"
-    msg["From"] = SMTP_USER
-    msg["To"] = ", ".join(recipients)
-
     full_html = _wrap_email_html(report_html, trade_date)
-    msg.attach(MIMEText(full_html, "html", "utf-8"))
+    subject = f"【台指籌碼觀察】{trade_date} 市場數據報告"
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.ehlo()
         server.starttls()
         server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, recipients, msg.as_string())
+        for recipient in recipients:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = SMTP_USER
+            msg["To"] = recipient
+            msg.attach(MIMEText(full_html, "html", "utf-8"))
+            server.sendmail(SMTP_USER, [recipient], msg.as_string())
 
-    logger.info("報告已寄送至 %s", recipients)
+    logger.info("報告已個別寄送至 %s", recipients)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
