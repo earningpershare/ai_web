@@ -498,23 +498,37 @@ def _get_paid_member_emails() -> list[str]:
         sb = create_client(url, key)
         sb.postgrest.auth(key)
 
-        # 查詢所有有效的 pro/ultimate 訂閱（cancelled = 取消但未到期，仍應收到報告）
-        resp = (
+        # active 訂閱直接納入；cancelled/superseded 加查到期日
+        active_resp = (
             sb.table("user_subscriptions")
-            .select("user_id, status, expires_at")
+            .select("user_id")
             .in_("plan", ["pro", "ultimate"])
-            .in_("status", ["active", "cancelled", "superseded"])
+            .eq("status", "active")
             .execute()
         )
+        user_ids = [row["user_id"] for row in (active_resp.data or [])]
+
+        # cancelled/superseded：另查，Python 端過濾未到期的
         from datetime import datetime, timezone as _tz
         now = datetime.now(_tz.utc)
-        # 過濾掉已到期的 cancelled/superseded（active 無到期日，直接保留）
-        valid_rows = []
-        for row in (resp.data or []):
+        nonactive_resp = (
+            sb.table("user_subscriptions")
+            .select("user_id, expires_at")
+            .in_("plan", ["pro", "ultimate"])
+            .in_("status", ["cancelled", "superseded"])
+            .execute()
+        )
+        for row in (nonactive_resp.data or []):
             exp = row.get("expires_at")
-            if not exp or datetime.fromisoformat(exp) > now:
-                valid_rows.append(row)
-        user_ids = [row["user_id"] for row in valid_rows]
+            if not exp:
+                continue
+            try:
+                exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                if exp_dt > now:
+                    user_ids.append(row["user_id"])
+            except (ValueError, TypeError) as e:
+                logger.warning("expires_at 解析失敗（%s）：%s", exp, e)
+        user_ids = list(dict.fromkeys(user_ids))  # 去重
 
         # 透過 admin API 取得每個 user 的 email
         emails = []
