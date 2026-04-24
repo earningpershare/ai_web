@@ -240,7 +240,7 @@ def trading_ingest(
     longs = total - shorts
     direction = "做空" if shorts >= longs else "做多"
 
-    # content = 序文（若有） + markdown 復盤
+    # content = 序文（若有） + 乾淨的交易記錄（已在本機腳本去除訊號，API 端不再處理 markdown_report）
     content_parts = []
     if body.preface:
         content_parts.append(body.preface)
@@ -248,17 +248,11 @@ def trading_ingest(
         content_parts.append(body.markdown_report)
     content = "\n\n---\n\n".join(content_parts) if content_parts else None
 
-    session_key = f"{body.trade_date}_{body.session}"
-
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 先查同 (trade_date, session_key in title)
+            # 先查同 (trade_date, session_label in title)
             cur.execute(
-                """
-                SELECT id FROM daily_operations
-                WHERE trade_date = %s AND title LIKE %s
-                LIMIT 1
-                """,
+                "SELECT id FROM daily_operations WHERE trade_date = %s AND title LIKE %s LIMIT 1",
                 (body.trade_date, f"%{session_label}%"),
             )
             existing = cur.fetchone()
@@ -273,9 +267,9 @@ def trading_ingest(
                     (title, direction, pnl_twd, pnl_note, content, existing["id"]),
                 )
                 row = dict(cur.fetchone())
-                log.info("trading-ingest 更新 id=%s date=%s session=%s", row["id"], body.trade_date, body.session)
                 result_id = row["id"]
                 action = "updated"
+                log.info("trading-ingest 更新 id=%s date=%s session=%s", result_id, body.trade_date, body.session)
             else:
                 cur.execute(
                     """
@@ -288,8 +282,34 @@ def trading_ingest(
                 )
                 row = dict(cur.fetchone())
                 result_id = row["id"]
-                log.info("trading-ingest 新增 id=%s date=%s session=%s", result_id, body.trade_date, body.session)
                 action = "created"
+                log.info("trading-ingest 新增 id=%s date=%s session=%s", result_id, body.trade_date, body.session)
+
+            # 計算累積損益（含本次），取第一筆日期作為起始
+            cur.execute(
+                """
+                SELECT COALESCE(SUM(pnl), 0) AS total, MIN(trade_date) AS since
+                FROM daily_operations
+                WHERE pnl IS NOT NULL AND is_published = TRUE
+                """
+            )
+            cum_row = dict(cur.fetchone())
+            cumulative = int(cum_row["total"])
+            since_date = str(cum_row["since"])[:10] if cum_row["since"] else str(body.trade_date)
+
+            cum_sign = "✅" if cumulative >= 0 else "❌"
+            cum_line = f"\n\n---\n**累積損益**（自 {since_date} 起）：{cum_sign} NT${cumulative:+,}"
+
+            # 把累積損益附加到 content
+            updated_content = (content or "") + cum_line
+            cur.execute(
+                "UPDATE daily_operations SET content=%s WHERE id=%s",
+                (updated_content, result_id),
+            )
+
         conn.commit()
 
-    return {"ok": True, "action": action, "id": result_id, "title": title, "pnl_twd": pnl_twd}
+    return {
+        "ok": True, "action": action, "id": result_id,
+        "title": title, "pnl_twd": pnl_twd, "cumulative_twd": cumulative,
+    }
