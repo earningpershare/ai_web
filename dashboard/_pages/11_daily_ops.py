@@ -189,11 +189,11 @@ for op in ops:
     trigger = op.get("trigger_indicators") or ""
 
     # 標題摘要列
-    col_main, col_ops_btns = st.columns([5, 1]) if is_admin else (st, None)
     if is_admin:
         col_main, col_ops_btns = st.columns([5, 1])
     else:
-        col_main = st
+        col_main = st.container()
+        col_ops_btns = None
 
     with col_main:
         label = (
