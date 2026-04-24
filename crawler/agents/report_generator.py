@@ -461,15 +461,23 @@ def send_report_email(report_html: str, trade_date: str, recipients: list[str]):
         server.ehlo()
         server.starttls()
         server.login(SMTP_USER, SMTP_PASS)
+        sent, failed = [], []
         for recipient in recipients:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"] = SMTP_USER
-            msg["To"] = recipient
-            msg.attach(MIMEText(full_html, "html", "utf-8"))
-            server.sendmail(SMTP_USER, [recipient], msg.as_string())
+            try:
+                msg = MIMEMultipart("alternative")
+                msg["Subject"] = subject
+                msg["From"] = SMTP_USER
+                msg["To"] = recipient
+                msg.attach(MIMEText(full_html, "html", "utf-8"))
+                server.sendmail(SMTP_USER, [recipient], msg.as_string())
+                logger.info("報告寄送成功：%s", recipient)
+                sent.append(recipient)
+            except Exception as e:
+                logger.error("報告寄送失敗：%s — %s", recipient, e)
+                failed.append(recipient)
 
-    logger.info("報告已個別寄送至 %s", recipients)
+    logger.info("寄送完成：成功 %d 位 %s；失敗 %d 位 %s",
+                len(sent), sent, len(failed), failed)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
