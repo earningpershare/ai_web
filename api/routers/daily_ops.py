@@ -194,7 +194,7 @@ TRADING_INGEST_SECRET = os.getenv("TRADING_INGEST_SECRET", "")
 class TradeRecord(BaseModel):
     direction: str          # long / short
     symbol: str
-    entry_price: float
+    entry_price: Optional[float] = None
     exit_price: Optional[float] = None
     pnl_pts: Optional[int] = None
     pnl_twd: Optional[int] = None
